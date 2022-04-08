@@ -24,3 +24,6 @@ Once you config is set up, just...
 ```
 node src
 ```
+
+## How it works...
+
