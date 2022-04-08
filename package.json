@@ -1,0 +1,32 @@
+{
+  "name": "tightrope",
+  "version": "1.0.0",
+  "description": "Channel Balancing for Lightning",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "mocha",
+    "one": "NODE_APP_INSTANCE=1 node src",
+    "two": "NODE_APP_INSTANCE=2 node src"
+  },
+  "author": "Instabot (https://synonym.to)",
+  "license": "MIT",
+  "dependencies": {
+    "@hyperswarm/dht": "^5.0.17",
+    "bignumber.js": "^9.0.2",
+    "bs58": "^5.0.0",
+    "config": "^3.3.7",
+    "crypto": "^1.0.1",
+    "hypercore": "^9.12.0",
+    "hypercore-promisifier": "^1.1.0",
+    "hyperswarm": "^3.0.3",
+    "ln-service": "^53.9.3"
+  },
+  "devDependencies": {
+    "eslint": "^7.32.0",
+    "eslint-config-standard": "^16.0.3",
+    "eslint-plugin-import": "^2.25.4",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-promise": "^5.2.0",
+    "mocha": "^9.2.2"
+  }
+}
