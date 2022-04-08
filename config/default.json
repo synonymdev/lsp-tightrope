@@ -1,0 +1,22 @@
+{
+    "secret": "secret",
+    "balance": {
+      "deadzone": 0.1
+    },
+    "refreshRateSeconds": 10,
+    "lightningNodes": [
+      {
+        "cert": "",
+        "macaroon": "",
+        "socket": ""
+      }
+    ],
+    "audit": {
+      "storage": {
+        "path": "./storage/"
+      },
+      "transactionLog": "transaction-log",
+      "eventLog": "event-log",
+      "verboseScreenLogging": true
+    }
+}
