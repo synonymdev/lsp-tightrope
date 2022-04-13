@@ -12,6 +12,10 @@ class Audit extends EventEmitter {
 
     // verbose
     this.verbose = config.get('audit.verboseScreenLogging')
+
+    // properties that we should mask
+    this.shouldMask = config.get('audit.shouldMask')
+    this.maskLen = 8
   }
 
   /**
@@ -20,11 +24,38 @@ class Audit extends EventEmitter {
    * @param {*} data
    */
   logEvent (event, data = {}) {
-    this.eventLog.append({ event, data })
+    const maskedData = this.maskPrivateProperties(data)
+    this.eventLog.append({ event, maskedData })
     console.log(event)
     if (this.verbose) {
-      console.log(data)
+      console.log(maskedData)
     }
+  }
+
+  /**
+   * Given an object, mask any private properties
+   * @param {*} data
+   * @returns
+   */
+  maskPrivateProperties (data) {
+    const keys = Object.keys(data)
+    return keys.reduce((masked, key) => {
+      // default to a straight copy
+      const out = { ...masked }
+      out[key] = data[key]
+
+      // If it is a key we should mask, try and do that.
+      if (this.shouldMask.includes(key)) {
+        if (typeof data[key] === 'string') {
+          const len = Math.max(data[key].length - this.maskLen, 0)
+          out[key] = data[key].substring(0, this.maskLen) + '*'.repeat(len)
+        } else {
+          out[key] = '**[protected data]**'
+        }
+      }
+
+      return out
+    }, {})
   }
 }
 

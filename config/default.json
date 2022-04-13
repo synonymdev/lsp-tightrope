@@ -17,6 +17,7 @@
       },
       "transactionLog": "transaction-log",
       "eventLog": "event-log",
-      "verboseScreenLogging": true
+      "verboseScreenLogging": true,
+      "shouldMask": ["topic", "publicKey", "remotePeer"]
     }
 }
