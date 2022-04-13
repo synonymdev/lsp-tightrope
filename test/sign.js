@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 const assert = require('assert')
-const signMessage = require('../src/sign')
+const signMessage = require('../src/util/sign')
 
 describe('Sign Messages', function () {
   it('should be able to sign messages', function () {
