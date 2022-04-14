@@ -65,7 +65,7 @@ class Tightrope extends Audit {
 
       this.logEvent('swarmConnected', { topic: this.topicBase58 })
     } catch (err) {
-      this.logEvent('startupError', { error: err })
+      this.logError('Failed while connecting to LN node and HyperSwarm', err)
     }
   }
 
@@ -86,7 +86,7 @@ class Tightrope extends Audit {
       // Drop all the open connections with peers
       this.activeConnections.forEach((c) => c.socket.end())
     } catch (err) {
-      console.log(err)
+      this.logError('Failed to close socket connection in shutdown', err)
     }
 
     // reset the list of peers
@@ -120,7 +120,7 @@ class Tightrope extends Audit {
     socket.on('close', () => this.onCloseConnection(remotePublicKey))
     socket.on('error', (err) => console.log(`Error on connection to ${remotePublicKey}`, err.message))
 
-    this.sendMessage(remotePublicKey, { type: 'hello', lnPublicKey: this.lightning.publicKey, lnAlias: this.lightning.alias })
+    this.sendMessage(remotePublicKey, { type: 'hello', publicKey: this.lightning.publicKey, alias: this.lightning.alias })
   }
 
   /**
@@ -138,41 +138,44 @@ class Tightrope extends Audit {
    * @param {*} data
    */
   async onMessage (remotePeer, data) {
-    const obj = JSON.parse(data)
+    try {
+      const obj = JSON.parse(data)
 
-    // Check the signature is a match (ie, they know the secret)
-    const signature = signMessage(this.secret, obj.timestamp, remotePeer, obj.message)
-    if (signature !== obj.signature) {
-      this.logEvent('errorBadSig', { remotePeer, message: data })
-      return
-    }
+      // Check the signature is a match (ie, they know the secret)
+      const signature = signMessage(this.secret, obj.timestamp, remotePeer, obj.message)
+      if (signature !== obj.signature) {
+        this.logError('Bad signature in incoming message', { remotePeer, message: data })
+        return
+      }
 
-    // Check that the message is recent (reduce replay attacks)
-    const now = Date.now()
-    const age = Math.abs(now - obj.timestamp)
-    if (age > 5000) {
-      this.logEvent('errorOldMsg', { remotePeer, messageAge: age, message: data })
-      return
-    }
+      // Check that the message is recent (reduce replay attacks)
+      const now = Date.now()
+      const age = Math.abs(now - obj.timestamp)
+      if (age > 5000) {
+        this.logError('Incoming message too old', { remotePeer, messageAge: age, message: data })
+        return
+      }
 
-    // do something
-    switch (obj.message.type) {
-      case 'hello':
-        await this.onHello(remotePeer, obj.message)
-        break
+      // do something
+      switch (obj.message.type) {
+        case 'hello':
+          await this.onHello(remotePeer, obj.message)
+          break
 
-      case 'payInvoice':
-        await this.onPayInvoice(remotePeer, obj.message)
-        break
+        case 'payInvoice':
+          await this.onPayInvoice(remotePeer, obj.message)
+          break
 
-      case 'paymentResult':
-        await this.onPaymentResult(remotePeer, obj.message)
-        break
+        case 'paymentResult':
+          await this.onPaymentResult(remotePeer, obj.message)
+          break
 
-      default:
-        console.log(`unknown action from remote peer ${remotePeer}`)
-        console.log(obj)
-        break
+        default:
+          this.logError('Unknown message from peer', { remotePeer, message: obj })
+          break
+      }
+    } catch (error) {
+      this.logError('failed handling incoming message from peer', { remotePeer, data, error })
     }
   }
 
@@ -182,18 +185,18 @@ class Tightrope extends Audit {
    * @param {*} msg
    */
   async onHello (remotePeer, msg) {
-    this.logEvent('peerHello', { remotePeer, remoteLnPublicKey: msg.lnPublicKey, alias: msg.lnAlias })
+    this.logEvent('peerHello', { remotePeer, remoteLnPublicKey: msg.publicKey, alias: msg.alias })
 
     // Discover if we have any channels open with this node
-    const channels = await this.lightning.findChannelsFromPubKey(msg.lnPublicKey)
+    const channels = await this.lightning.findChannelsFromPubKey(msg.publicKey)
     if (channels.length > 0) {
       channels.forEach((c) => {
-        // log it
-        this.logEvent('peerSharedChannel', { remotePeer, remoteAlias: msg.lnAlias, localAlias: this.lightning.alias, channelInfo: c })
+        // Found a channel we have in common with this peer. Watch it...
+        this.logEvent('peerSharedChannel', { remotePeer, remoteAlias: msg.alias, localAlias: this.lightning.alias, channelInfo: c })
 
         // track the owner of this channel
         this.channelOwners = this.channelOwners.filter((owner) => owner.channelId !== c.id)
-        this.channelOwners.push({ channelId: c.id, remotePeer, remoteLightning: msg.lnPublicKey })
+        this.channelOwners.push({ channelId: c.id, remotePeer, remoteLightning: msg.publicKey })
 
         // watch the channel for it to go out of balance
         this.lightning.watchChannel(c.id)
@@ -247,7 +250,7 @@ class Tightrope extends Audit {
   sendMessage (to, message) {
     const socket = this.findConnection(to)
     if (!socket) {
-      this.logEvent('missingConnection', { remotePeer: to })
+      this.logError('Trying to send a message to unknown peer', { remotePeer: to, message })
       return
     }
 

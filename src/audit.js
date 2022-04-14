@@ -26,6 +26,15 @@ class Audit extends EventEmitter {
       console.log(data)
     }
   }
+
+  /**
+   * Logs an error event
+   * @param {*} reason - very short description of the error
+   * @param {*} data - any data that will help
+   */
+  logError (reason, data = {}) {
+    this.logEvent('error', { error: reason, details: data })
+  }
 }
 
 module.exports = Audit

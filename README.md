@@ -29,7 +29,7 @@ node src
 
 Each instance of Tightrope can be given API credentials of many Lightning nodes. Tightrope will find all the channels between these Lightning nodes and keep an eye on them. When they drift too far out of balance, Tightrope will ask the poorer side of the channel to generate an invoice to bring it back into balance. Tightrope will then pass this invoice to the richer side of the channel, asking for it to be paid. When paid, the channel is back in balance.
 
-If parts of your cluster of Lightning nodes are managed by someone else, it might not be desirable for one party to provide the other with the API credentials for their set of Lightning nodes. Tightrope also solves this issue! Each party runs their own instance of Tightrope, with just their Lightning node credentials included. They share a secret that allows Tightrope to find the rest of the cluster of Lightning nodes using Hyperswarm, so channels that connect the two groups can also be kept in balance securely without either side needing to share API credentials with the other. 
+If parts of your cluster of Lightning nodes are managed by someone else, it might not be desirable for one party to provide the other with the API credentials for their set of Lightning nodes. Tightrope also solves this issue! Each party runs their own instance of Tightrope, with just their Lightning node credentials included. They share a secret that allows Tightrope to find the rest of the cluster of Lightning nodes using Hyperswarm, so channels that connect the two groups can also be kept in balance securely without either side needing to share API credentials with the other.
 
 Example:
 
@@ -43,6 +43,46 @@ Later Bob opens a new channel between E and B. Tightrope automatically detects t
 
 ## How it works...
 
-Tightrope first connects to all the Lightning nodes listed in the config file. For each node it starts a hyperswarm, following a topic derived from the secret in the config. This ensure that all other nodes in the cluster can find each other, and are able to talk securely over a peer-to-peer noise connection with each other. 
+Tightrope first connects to all the Lightning nodes listed in the config file. For each node it starts a hyperswarm, following a topic derived from the secret in the config. This ensure that all other nodes in the cluster can find each other, and are able to talk securely over a peer-to-peer noise connection with each other.
 
 Using the mechanism, Tightrope determines if any of the channels on a given node are actually channels to one of the other nodes in the cluster. If they are, it starts watching them. Whenever the channel is out of balance, an invoice is generated and sent to the peer that manages the Lightning node on the other side of the channel. Once validated, the invoice is paid, bringing the channel back into balance.
+
+
+## Messages Sent Between Peers...
+
+Messages are sent peer-to-peer over an encrypted (noise) stream. Messages are also signed to ensure their validity.
+
+#### `hello`
+
+Data:
+* publicKey: Lightning Node public Key
+* alias: Lightning Node alias
+
+Sent when a new peer on the HyperSwarm topic connects to us to tell them about our Lightning node. Each Lightning node being tracked in Tightrope will send a `hello` message each time a new connection is established and will recieve a `hello` message from the remote peer.
+
+Eventually a node will have said `hello` to everyone in the swarm and received a `hello` from everyone in the swarm. This process allows Tightrope to build up a map of all the peers in the cluster that have an open channel with our Lightning node.
+
+Any relevant channels in the cluster are then watched (typically by both sides) until they drift far enough out of balance to need a rebalancing payment to be made.
+
+
+#### `payInvoice`
+
+Data:
+* invoice: Lightning Bolt 11 encoded invoice
+* tokens: Amount to pay
+* channelId: The channel id being rebalanced
+
+When Tightrope discovers that a relevant channels local balance has fallen below some threshold, it will create an invoice to correct the situation and send its peer a `payInvoice` to ask for it to be paid. This channel will then be blocked from making another payment attempt for a while (configurable).
+
+On receipt of the `payInvoice` message, Tightrope will validate the invoice payment and if everything is acceptable, pay it. Once the payment has been completed (or failed, or rejected), it sends a `paymentResults` message back to the peer that initiated the payment.
+
+#### `paymentResult`
+
+Data:
+* channelId: Channel id being rebalanced
+* paymentId: Payment id
+* confirmed: true if the payment has been confirmed, false if not
+* confirmedAt: An ISO 8601 formatted date time string
+
+When a payment has completed, this message is sent back to the peer that asked to be paid, providing information about the payment.
+
