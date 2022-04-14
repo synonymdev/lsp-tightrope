@@ -3,7 +3,7 @@ const Bignumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
 const Audit = require('./audit')
-const asyncFilter = require('./async-filter')
+const asyncFilter = require('./util/async-filter')
 
 // https://github.com/alexbosworth/ln-service
 
