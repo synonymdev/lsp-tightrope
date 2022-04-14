@@ -2,7 +2,7 @@ const config = require('config')
 const crypto = require('crypto')
 const Hyperswarm = require('hyperswarm')
 const bs58 = require('bs58')
-const signMessage = require('./sign')
+const signMessage = require('./util/sign')
 const Lightning = require('./lightning')
 const Audit = require('./audit')
 
@@ -182,7 +182,7 @@ class Tightrope extends Audit {
    * @param {*} msg
    */
   async onHello (remotePeer, msg) {
-    this.logEvent('peerHello', { remotePeer, remoteLnPublicKey: msg.lnPublicKey, alias: msg.lnAlias })
+    this.logEvent('peerHello', { remotePeer, publicKey: msg.lnPublicKey, alias: msg.lnAlias })
 
     // Discover if we have any channels open with this node
     const channels = await this.lightning.findChannelsFromPubKey(msg.lnPublicKey)
