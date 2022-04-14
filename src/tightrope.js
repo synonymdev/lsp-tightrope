@@ -192,7 +192,15 @@ class Tightrope extends Audit {
     if (channels.length > 0) {
       channels.forEach((c) => {
         // Found a channel we have in common with this peer. Watch it...
-        this.logEvent('peerSharedChannel', { remotePeer, remoteAlias: msg.alias, localAlias: this.lightning.alias, channelInfo: c })
+        this.logEvent('peerSharedChannel', {
+          remotePeer,
+          remoteAlias: msg.alias,
+          localAlias: this.lightning.alias,
+          channelId: c.id,
+          localBalance: c.localBalance.toNumber(),
+          remoteBalance: c.remoteBalance.toNumber(),
+          capacity: c.capacity.toNumber()
+        })
 
         // track the owner of this channel
         this.channelOwners = this.channelOwners.filter((owner) => owner.channelId !== c.id)
