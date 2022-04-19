@@ -1,9 +1,5 @@
 {
     "secret": "secret",
-    "balance": {
-      "deadzone": 0.1
-    },
-    "refreshRateSeconds": 10,
     "lightningNodes": [
       {
         "cert": "",
@@ -17,7 +13,7 @@
       },
       "transactionLog": "transaction-log",
       "eventLog": "event-log",
-      "verboseScreenLogging": true,
+      "verboseScreenLogging": false,
       "shouldMask": ["topic", "publicKey", "remotePeer"]
     },
     "limits": {
@@ -29,7 +25,8 @@
         "maxAmountPerPeriod": 500000,
         "maxAmountPeriod": "1d",
         "balancePoint": 0.5,
-        "deadzone": 0.1
+        "deadzone": 0.1,
+        "refreshRate": 10
       },
       "nodeSettings": [
         {
