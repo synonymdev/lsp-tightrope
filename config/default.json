@@ -19,5 +19,39 @@
       "eventLog": "event-log",
       "verboseScreenLogging": true,
       "shouldMask": ["topic", "publicKey", "remotePeer"]
+    },
+    "limits": {
+      "baseSettings": {
+        "maxTransactionSize": 60000,
+        "minTimeBetweenPayments": 60,
+        "maxTransactionsPerPeriod": 5,
+        "maxTransactionsPeriod": "4h",
+        "maxAmountPerPeriod": 500000,
+        "maxAmountPeriod": "1d",
+        "balancePoint": 0.5,
+        "deadzone": 0.1
+      },
+      "nodeSettings": [
+        {
+          "id": "alice",
+          "maxTransactionSize": 60000,
+          "minTimeBetweenPayments": 60,
+          "maxTransactionsPerPeriod": 5,
+          "maxTransactionsPeriod": "4h",
+          "maxAmountPerPeriod": 500000,
+          "maxAmountPeriod": "1d"
+        }
+      ],
+      "channelSettings": [
+        {
+          "id": "26346238748623846",
+          "maxTransactionSize": 60000,
+          "minTimeBetweenPayments": 60,
+          "maxTransactionsPerPeriod": 5,
+          "maxTransactionsPeriod": "4h",
+          "maxAmountPerPeriod": 500000,
+          "maxAmountPeriod": "1d"
+        }
+      ]
     }
 }
