@@ -86,3 +86,4 @@ Data:
 
 When a payment has completed, this message is sent back to the peer that asked to be paid, providing information about the payment.
 
+<img alt="Flow of messages" width="60%" src="docs/example-flow.png" />
