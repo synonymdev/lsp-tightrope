@@ -33,6 +33,15 @@ class Audit extends EventEmitter {
   }
 
   /**
+   * Logs an error event
+   * @param {*} reason - very short description of the error
+   * @param {*} data - any data that will help
+   */
+  logError (reason, data = {}) {
+    this.logEvent('error', { error: reason, details: data })
+  }
+
+  /**
    * Given an object, mask any private properties
    * @param {*} data
    * @returns

@@ -109,8 +109,10 @@ class Lightning extends Audit {
   async onConsiderChannelRebalance (channelId) {
     const channel = this.channels.find((c) => c.id === channelId)
     if (!channel) {
-      // remove this channel from the watch list
-      this.logEvent('channelMissing', { alias: this.alias, publicKey: this.publicKey, channelId: channelId })
+      // log the problem
+      this.logError('Watched channel missing', { alias: this.alias, publicKey: this.publicKey, channelId: channelId })
+
+      // asked to be removed from the watchlist
       return false
     }
 
@@ -118,12 +120,9 @@ class Lightning extends Audit {
       // Work out percentage balance that is local
       const local = channel.localBalance.div(channel.capacity)
       if (local < this.rebalanceThreshold) {
-        console.log(`Local balance is ${local.times(100).toFixed(1)}% of total capacity...`)
-
         // Work out how much to ask for
         const targetBalance = channel.localBalance.plus(channel.remoteBalance).div(2)
         const invoiceAmount = targetBalance.minus(channel.localBalance)
-        console.log(`Generate an invoice to ask for ${invoiceAmount.toFixed(0)} sats`)
         await this.rebalanceChannel(channel, invoiceAmount)
       }
     }
@@ -169,7 +168,7 @@ class Lightning extends Audit {
       this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
       this.emit('requestRebalance', channel, invoice.request, tokens)
     } catch (err) {
-      console.log(err)
+      this.logError('rebalance channel failed', err)
     }
   }
 
@@ -187,7 +186,7 @@ class Lightning extends Audit {
     }
 
     return {
-      id: payment.id || null,
+      paymentId: payment.id || null,
       confirmed: payment.is_confirmed || false,
       confirmedAt: payment.confirmed_at || null
     }
@@ -254,6 +253,10 @@ class Lightning extends Audit {
     this.watchList.push(channelId)
   }
 
+  /**
+   * Stop watching a channel
+   * @param {*} channelId
+   */
   unwatchChannel (channelId) {
     this.watchList = this.watchList.filter(c => c !== channelId)
   }
