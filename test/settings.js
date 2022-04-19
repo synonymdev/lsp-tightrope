@@ -37,6 +37,17 @@ describe('Settings', function () {
     expect(settings.get('b', ['more', 'test'])).to.equal(5)
   })
 
+  it('can finds hybrid settings', function () {
+    const settings = new Settings(base)
+    settings.addIdSettings([{ id: 'test', b: 3 }, { id: 'other', b: 4 }, { id: 'test:other', b: 5 }])
+
+    expect(settings.get('b')).to.equal(2)
+    expect(settings.get('b', 'test')).to.equal(3)
+    expect(settings.get('b', 'other')).to.equal(4)
+    expect(settings.get('b', ['other', 'test'])).to.equal(3)
+    expect(settings.get('b', ['test', 'other'])).to.equal(5)
+  })
+
   it('can handle an ids containing elements without an id', function () {
     const settings = new Settings(base, [
       { bad: 1 }, { id: 'test', b: 5 }, { a: 6, b: 7 }
