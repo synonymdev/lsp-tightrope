@@ -1,5 +1,5 @@
 const config = require('config')
-const Bignumber = require('bignumber.js')
+const BigNumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
 const Audit = require('./audit')
@@ -225,9 +225,9 @@ class Lightning extends Audit {
       localAlias: this.alias,
       localPublicKey: this.publicKey,
       remotePublicKey: c.partner_public_key,
-      localBalance: new Bignumber(c.local_balance),
-      remoteBalance: new Bignumber(c.remote_balance),
-      capacity: new Bignumber(c.capacity),
+      localBalance: new BigNumber(c.local_balance),
+      remoteBalance: new BigNumber(c.remote_balance),
+      capacity: new BigNumber(c.capacity),
       isActive: c.is_active,
       isClosing: c.is_closing,
       isOpening: c.is_opening,
