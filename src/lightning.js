@@ -2,13 +2,13 @@ const config = require('config')
 const BigNumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
-const Audit = require('./audit')
+const Logging = require('./logging')
 const asyncFilter = require('./util/async-filter')
 const settings = require('./util/tightrope-settings')
 
 // https://github.com/alexbosworth/ln-service
 
-class Lightning extends Audit {
+class Lightning extends Logging {
   /**
    * Set up the lightning node connection
    * @param {*} node { cert, macaroon, socket }

@@ -11,10 +11,10 @@
       "storage": {
         "path": "./storage/"
       },
-      "transactionLog": "transaction-log",
+      "transactionHistory": "transaction-log",
       "eventLog": "event-log",
       "verboseScreenLogging": false,
-      "shouldMask": ["topic", "publicKey", "remotePeer"]
+      "shouldMask": ["topic", "publicKey", "remotePeer", "srcNode", "dstNode"]
     },
     "limits": {
       "baseSettings": {
@@ -28,27 +28,7 @@
         "deadzone": 0.1,
         "refreshRate": 10
       },
-      "nodeSettings": [
-        {
-          "id": "alice",
-          "maxTransactionSize": 60000,
-          "minTimeBetweenPayments": 60,
-          "maxTransactionsPerPeriod": 5,
-          "maxTransactionsPeriod": "4h",
-          "maxAmountPerPeriod": 500000,
-          "maxAmountPeriod": "1d"
-        }
-      ],
-      "channelSettings": [
-        {
-          "id": "26346238748623846",
-          "maxTransactionSize": 60000,
-          "minTimeBetweenPayments": 60,
-          "maxTransactionsPerPeriod": 5,
-          "maxTransactionsPeriod": "4h",
-          "maxAmountPerPeriod": 500000,
-          "maxAmountPeriod": "1d"
-        }
+      "idSettings": [
       ]
     }
 }

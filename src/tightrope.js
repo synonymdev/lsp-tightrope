@@ -4,9 +4,10 @@ const Hyperswarm = require('hyperswarm')
 const bs58 = require('bs58')
 const signMessage = require('./util/sign')
 const Lightning = require('./lightning')
-const Audit = require('./audit')
+const Logging = require('./logging')
+const transactions = require('./transactions')
 
-class Tightrope extends Audit {
+class Tightrope extends Logging {
   /**
    * Set up the local instance and get the config secret
    */
@@ -30,9 +31,6 @@ class Tightrope extends Audit {
 
     // track the node info
     this.lnNodeInfo = lnNodeInfo
-
-    // Log something
-    this.logEvent('booting')
   }
 
   /**
@@ -40,6 +38,9 @@ class Tightrope extends Audit {
    */
   async connect () {
     try {
+      // Log something
+      this.logEvent('starting')
+
       // Connect to the lightning node
       this.lightning = new Lightning(this.lnNodeInfo)
       await this.lightning.connect()
@@ -221,7 +222,7 @@ class Tightrope extends Audit {
   async onPayInvoice (remotePeer, msg) {
     this.logEvent('onPayInvoice', { channelId: msg.channelId, invoice: msg.invoice, amount: msg.tokens })
     const result = await this.lightning.payInvoice(msg.invoice)
-    this.sendMessage(remotePeer, { ...result, channelId: msg.channelId, type: 'paymentResult' })
+    this.sendMessage(remotePeer, { ...msg, ...result, type: 'paymentResult' })
   }
 
   /**
@@ -231,6 +232,9 @@ class Tightrope extends Audit {
    * @param {*} msg
    */
   async onPaymentResult (remotePeer, msg) {
+    // put this potential transaction into the audit log
+    transactions.add({ ...msg, state: msg.confirmed ? 'complete' : 'failed' })
+
     this.logEvent('onPaymentResult', { remotePeer, ...msg })
     await this.lightning.confirmPayment(msg)
   }
@@ -244,8 +248,28 @@ class Tightrope extends Audit {
   async onRequestRebalance (channel, request, tokens) {
     const owner = this.channelOwners.find((c) => c.channelId === channel.id)
     if (owner) {
+      // put this potential transaction into the audit log
+      transactions.add({
+        srcNode: channel.localPublicKey,
+        dstNode: channel.remotePublicKey,
+        channelId: channel.id,
+        amount: tokens,
+        invoice: request,
+        state: 'requesting'
+      })
+
+      // and record the event
       this.logEvent('onRequestRebalance', { remotePeer: owner.remotePeer, invoice: request, amount: tokens, channelId: channel.id })
-      this.sendMessage(owner.remotePeer, { type: 'payInvoice', invoice: request, tokens, channelId: channel.id })
+
+      // finally ask for the invoice to be paid by the other peer
+      this.sendMessage(owner.remotePeer, {
+        type: 'payInvoice',
+        invoice: request,
+        tokens,
+        channelId: channel.id,
+        srcNode: channel.localPublicKey,
+        dstNode: channel.remotePublicKey
+      })
     }
   }
 
