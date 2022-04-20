@@ -123,12 +123,16 @@ class Lightning extends Audit {
       const deadzone = settings('deadzone', [this.alias, channelId])
       const rebalanceThreshold = Math.min(1, Math.max(0, balancePoint - deadzone))
 
-      console.log(`${this.alias}:${channelId} Local: ${local * 100}%. Threshold: ${rebalanceThreshold * 100}% `)
       if (local < rebalanceThreshold) {
         // Work out how much to ask for
         const targetBalance = channel.localBalance.plus(channel.remoteBalance).times(balancePoint)
         const invoiceAmount = targetBalance.minus(channel.localBalance)
-        await this.rebalanceChannel(channel, invoiceAmount)
+
+        const maxTransactionSize = settings('maxTransactionSize', [this.alias, channelId])
+        const amount = BigNumber.min(invoiceAmount, maxTransactionSize)
+        if (amount.isPositive()) {
+          await this.rebalanceChannel(channel, amount)
+        }
       }
     }
 
