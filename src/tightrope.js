@@ -52,13 +52,6 @@ class Tightrope extends Logging {
       this.myPublicKey = bs58.encode(swarm.keyPair.publicKey)
 
       // Add handlers
-      swarm.on('close', () => console.log('close'))
-
-      swarm.on('disconnection', () => console.log('disconnection'))
-      swarm.on('peer', () => console.log('peer'))
-      swarm.on('peer-rejected', () => console.log('peer-rejected'))
-      swarm.on('updated', () => console.log('updated'))
-
       swarm.on('connection', (socket, peerInfo) => this.onOpenConnection(socket, peerInfo))
 
       // join the hyperswarm on the topic we derived from the secret
@@ -119,7 +112,7 @@ class Tightrope extends Logging {
 
     socket.on('end', () => { socket.end() })
     socket.on('close', () => this.onCloseConnection(remotePublicKey))
-    socket.on('error', (err) => console.log(`Error on connection to ${remotePublicKey}`, err.message))
+    socket.on('error', (err) => this.logError('Socket error', { remotePeer: remotePublicKey, message: err.message }))
 
     this.sendMessage(remotePublicKey, { type: 'hello', publicKey: this.lightning.publicKey, alias: this.lightning.alias })
   }
