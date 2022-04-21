@@ -228,8 +228,6 @@ class Lightning extends Logging {
       // decode the payment request
       const request = msg.invoice
       const details = await lnService.decodePaymentRequest({ lnd: this.lnd, request })
-      console.log(details)
-      console.log(msg)
 
       // Check the amount matches
       if (+details.tokens !== +amount) {
