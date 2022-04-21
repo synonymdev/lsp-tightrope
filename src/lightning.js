@@ -1,4 +1,3 @@
-const config = require('config')
 const BigNumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
@@ -186,19 +185,84 @@ class Lightning extends Logging {
    * @param {*} invoice
    * @returns
    */
-  async payInvoice (invoice) {
-    const payment = await lnService.pay({ lnd: this.lnd, request: invoice })
-    if (payment && payment.is_confirmed) {
-      this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice, paymentId: payment.id })
-    } else {
-      this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice })
+  async payInvoice (msg) {
+    try {
+      // See if we should pay the invoice or not?
+      const shouldPay = await this.shouldPayInvoice(msg)
+      if (shouldPay) {
+        const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
+        if (payment && payment.is_confirmed) {
+          this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
+          return {
+            paymentId: payment.id || null,
+            confirmed: payment.is_confirmed || false,
+            confirmedAt: payment.confirmed_at || null
+          }
+        } else {
+          this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice })
+        }
+      }
+    } catch (err) {
+      this.logError('Failed to pay invoice', { ...msg, error: err.message })
     }
 
+    // No, didn't pay
     return {
-      paymentId: payment.id || null,
-      confirmed: payment.is_confirmed || false,
-      confirmedAt: payment.confirmed_at || null
+      paymentId: null,
+      confirmed: false,
+      confirmedAt: null
     }
+  }
+
+  /**
+   * Determine if we should pay the given invoice details
+   * @param {*} msg
+   * @returns
+   */
+  async shouldPayInvoice (msg) {
+    try {
+      const channelId = msg.channelId
+      const amount = msg.tokens
+      const from = msg.srcNode
+
+      // decode the payment request
+      const request = msg.invoice
+      const details = await lnService.decodePaymentRequest({ lnd: this.lnd, request })
+      console.log(details)
+      console.log(msg)
+
+      // Check the amount matches
+      if (+details.tokens !== +amount) {
+        this.logError('Rejected invoice as amount differs', { invoice: request, invoiceAmount: details.tokens, requestAmount: amount })
+        return false
+      }
+
+      // Check the payment destination is what we think it should be
+      if (details.destination !== from) {
+        this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, requestDestination: from })
+        return false
+      }
+
+      // Look up the channel id locally and check that the src and destination of the channel match our data
+      const channelInfo = await this.findChannelFromId(channelId)
+      if (!channelInfo) {
+        this.logError('Rejected invoice as channel was not found locally', { invoice: request, channelId })
+        return false
+      }
+
+      // Is this channel's remote peer the one the invoice is from (should be)
+      if (channelInfo.remotePublicKey !== from) {
+        this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, requestNode: from, channelNode: channelInfo.remotePublicKey })
+        return false
+      }
+
+      // Can't find a good reason not to pay it, so pay it
+      return true
+    } catch (err) {
+      this.logError('Failed to determine if an invoice should be paid', { ...msg, error: err.message })
+    }
+
+    return false
   }
 
   /**
@@ -218,25 +282,30 @@ class Lightning extends Logging {
    * @returns - an array of channels
    */
   async refreshChannelList () {
-    if (!this.lnd) {
-      this.channels = []
-      return this.channels
-    }
+    try {
+      if (!this.lnd) {
+        this.channels = []
+        return this.channels
+      }
 
-    const channelList = await lnService.getChannels({ lnd: this.lnd })
-    this.channels = channelList.channels.map((c) => ({
-      id: c.id,
-      localAlias: this.alias,
-      localPublicKey: this.publicKey,
-      remotePublicKey: c.partner_public_key,
-      localBalance: new BigNumber(c.local_balance),
-      remoteBalance: new BigNumber(c.remote_balance),
-      capacity: new BigNumber(c.capacity),
-      isActive: c.is_active,
-      isClosing: c.is_closing,
-      isOpening: c.is_opening,
-      isPrivate: c.is_private
-    }))
+      const channelList = await lnService.getChannels({ lnd: this.lnd })
+      this.channels = channelList.channels.map((c) => ({
+        id: c.id,
+        localAlias: this.alias,
+        localPublicKey: this.publicKey,
+        remotePublicKey: c.partner_public_key,
+        localBalance: new BigNumber(c.local_balance),
+        remoteBalance: new BigNumber(c.remote_balance),
+        capacity: new BigNumber(c.capacity),
+        isActive: c.is_active,
+        isClosing: c.is_closing,
+        isOpening: c.is_opening,
+        isPrivate: c.is_private
+      }))
+    } catch (err) {
+      this.logError('Failed to update the channel list', { alias: this.alias, error: err.message })
+      this.channels = []
+    }
 
     return this.channels
   }
@@ -250,6 +319,16 @@ class Lightning extends Logging {
   async findChannelsFromPubKey (lnPublicKey) {
     await this.refreshChannelList()
     return this.channels.filter((c) => c.remotePublicKey === lnPublicKey)
+  }
+
+  /**
+   * Finds a channel from the channel id given
+   * @param {*} channelId
+   * @returns
+   */
+  async findChannelFromId (channelId) {
+    await this.refreshChannelList()
+    return this.channels.find((c) => c.id === channelId)
   }
 
   /**

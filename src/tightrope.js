@@ -214,7 +214,7 @@ class Tightrope extends Logging {
    */
   async onPayInvoice (remotePeer, msg) {
     this.logEvent('onPayInvoice', { channelId: msg.channelId, invoice: msg.invoice, amount: msg.tokens })
-    const result = await this.lightning.payInvoice(msg.invoice)
+    const result = await this.lightning.payInvoice(msg)
     this.sendMessage(remotePeer, { ...msg, ...result, type: 'paymentResult' })
   }
 
