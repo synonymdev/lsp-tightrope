@@ -61,11 +61,10 @@ All the default values that will be used as a fallback for everything are listed
 Possible settings found in baseSettings, or each entry in idSettings are as follows:-
 
 * maxTransactionSize - the max size, in tokens, of a single transaction
-* minTimeBetweenPayments - The shortest possible time, in seconds, between each rebalancing payment being made.
-* maxTransactionsPerPeriod - The max number of rebalancing payments made in each period
+* minTimeBetweenPayments - The shortest possible time between each rebalancing payment being made. (as a time string, eg "60s", "10m", "4h", "1d")
+* limitsPeriod - The period of time to limit transaction counts and amount to (as a time string)
 * maxTransactionsPeriod - The period used for the above limit
 * maxAmountPerPeriod - The max amount that can be transacted (sum of all transactions) in each period
-* maxAmountPeriod - The period used for the above limit
 * balancePoint - Where should the balance point be for the funds in the channel. Defaults to 0.5
 * deadzone - The size of the zone around the balance point in which no action is taken. Defaults to 0.1. With the defaults, the channels want to have 50% of their balance on each side (local and remote), but a rebalance will only occur if it drifts more than 10% away from this state (eg at 40% local, 60% remote).
 * refreshRate - How often should Tightrope check the current balance of channels
