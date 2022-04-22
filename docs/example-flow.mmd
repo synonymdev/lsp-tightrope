@@ -1,0 +1,22 @@
+%% Mermaid js diagram script. See https://github.com/mermaidjs/mermaid.cli
+%% Editor https://mermaid-js.github.io/mermaid-live-editor/edit
+sequenceDiagram
+    participant Alice
+    participant Bob
+
+    rect rgb(155,255,255)
+    Note left of Alice: Alice sees connection from Bob
+    Alice->>Bob: hello
+    Note right of Bob: Bob finds channels with Alice
+    end
+    rect rgb(155,255,255)
+    Note right of Bob: Bob sees connection from Alice
+    Bob->>Alice: hello
+    Note left of Alice: Alice finds channels with Bob
+    end
+    Note over Alice, Bob: Both watching found channels...
+    Note left of Alice: Alice sees low balance on a channel
+    Note left of Alice: Alice generates invoice to rebalance
+    Alice->>Bob: payInvoice
+    Note right of Bob: Bob pays the invoice
+    Bob->>Alice: paymentResult

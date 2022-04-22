@@ -8,20 +8,12 @@ This is pre-alpha software. Please use at your own risk. Expect breaking changes
 
 ## Usage
 
-Before you start, copy `config/default.json` to `config/local.json` and edit the copy.
-
-* secret - this is the shared secret that the cluster will use. Pick a long and complex password
-* balance.deadzone - how far away from in-balance can a channel get before Tightrope will attempt to rebalance the channel. The default is 0.1 (10%)
-* refreshRateSeconds - the time (in seconds) between each check of the existing channels. At this interval, Tightrope will check channels that connect other lightning nodes in the cluster and if any are out of balance, it will initiate the process of rebalancing the channel.
-* lightningNodes - an array of lightning nodes to manage. For each node you will need to provide the following...
-    * base64 encoded TLS Certificate
-    * base64 encoded macaroon that has enough permissions to query channels, create and pay invoices
-    * the GRPC Host of the lightning node
-* audit - various settings about where to store the event and transactions logs (both Hypercores) and if verbose logging to the terminal is also required
+Before you start, copy `config/default.json` to `config/local.json` and edit the copy. See below for details.
 
 Once you config is set up, just...
 
 ```
+npm install
 node src
 ```
 
@@ -33,7 +25,7 @@ If parts of your cluster of Lightning nodes are managed by someone else, it migh
 
 Example:
 
-Alice has 2 lightning nodes (A and B). Each has many open channels, including 1 important channel between A and B that Alice wants to keep in balance to maintain liquidity between A and B. Alice sets up Tightrope, and adds the API credentials for A and B into the config. She also sets the secret in her Tightrope config to "correcthorsebatterystaple". She starts Tightrope and it will automatically find the channel between A and B and keeps it in constant balance.
+Alice has 2 lightning nodes (A and B). Each has many open channels, including 1 important channel between A and B that Alice wants to keep in balance to maintain liquidity between A and B. Alice sets up Tightrope, and adds the API credentials for A and B into the config. She also sets the secret in her Tightrope config to "correcthorsebatterystaple" (though please use a secure random password yourself). She starts Tightrope and it will automatically find the channel between A and B and keeps it in constant balance.
 
 Bob also runs a cluster of Lightning nodes (C, D and E). He also needs to maintain liquidity between his nodes and uses Tightrope to do this. His config contains details of all three of this nodes along with his own secret password.
 
@@ -46,6 +38,37 @@ Later Bob opens a new channel between E and B. Tightrope automatically detects t
 Tightrope first connects to all the Lightning nodes listed in the config file. For each node it starts a hyperswarm, following a topic derived from the secret in the config. This ensure that all other nodes in the cluster can find each other, and are able to talk securely over a peer-to-peer noise connection with each other.
 
 Using the mechanism, Tightrope determines if any of the channels on a given node are actually channels to one of the other nodes in the cluster. If they are, it starts watching them. Whenever the channel is out of balance, an invoice is generated and sent to the peer that manages the Lightning node on the other side of the channel. Once validated, the invoice is paid, bringing the channel back into balance.
+
+## Audit Logging
+
+Tightrope also records events and transactions into an append-only log (A Hypercore). The logs provide a full history of events (such as peer discovery). The transaction log lists all payment attempts between nodes in the cluster and records their outcome.
+
+## Settings
+
+The following values can be configured in the settings files. default.json defines the default values. Override or replace them in local.json
+
+* secret - this is the shared secret that the cluster will use. Pick a long and complex password
+* lightningNodes - an array of lightning nodes to manage. For each node you will need to provide the following...
+    * base64 encoded TLS Certificate
+    * base64 encoded macaroon that has enough permissions to query channels, create and pay invoices
+    * the GRPC Host of the lightning node
+* audit - various settings about where to store the event and transactions logs (both Hypercores) and if verbose logging to the terminal is also required
+
+The final section of the config gives you control over how nodes will rebalance between each other. You can provide default settings that apply to all nodes and channels, as well as overriding the settings for specific Lightning nodes, or individual channels if needed.
+
+All the default values that will be used as a fallback for everything are listed in `limits.baseSettings`. Settings that override these base settings should be provided as an array in `limits.idSettings`. Each object in the array should include an `id` property and replacement values for any of the base settings. Valid id's are Lightning node alias names, channel id's and 'alias:channelId' for settings that are specific one side of the channel (a channel from Alice to Bob has the same channel id for them both, so 'Alice:channelId' will control the settings that Alice uses, and 'Bob:channelId' will control the settings that Bob uses).
+
+Possible settings found in baseSettings, or each entry in idSettings are as follows:-
+
+* maxTransactionSize - the max size, in tokens, of a single transaction
+* minTimeBetweenPayments - The shortest possible time, in seconds, between each rebalancing payment being made.
+* maxTransactionsPerPeriod - The max number of rebalancing payments made in each period
+* maxTransactionsPeriod - The period used for the above limit
+* maxAmountPerPeriod - The max amount that can be transacted (sum of all transactions) in each period
+* maxAmountPeriod - The period used for the above limit
+* balancePoint - Where should the balance point be for the funds in the channel. Defaults to 0.5
+* deadzone - The size of the zone around the balance point in which no action is taken. Defaults to 0.1. With the defaults, the channels want to have 50% of their balance on each side (local and remote), but a rebalance will only occur if it drifts more than 10% away from this state (eg at 40% local, 60% remote).
+* refreshRate - How often should Tightrope check the current balance of channels
 
 
 ## Messages Sent Between Peers...
@@ -86,3 +109,4 @@ Data:
 
 When a payment has completed, this message is sent back to the peer that asked to be paid, providing information about the payment.
 
+<img alt="Flow of messages" width="100%" src="docs/example-flow.png" />

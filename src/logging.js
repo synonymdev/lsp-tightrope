@@ -1,14 +1,10 @@
 const config = require('config')
 const { EventEmitter } = require('events')
-const auditFactory = require('./audit-logging')
+const eventLog = require('./audit/event-log')
 
-class Audit extends EventEmitter {
+class Logging extends EventEmitter {
   constructor () {
     super()
-
-    // Audit Logging
-    this.eventLog = auditFactory(config.get('audit.eventLog'))
-    this.transactionLog = auditFactory(config.get('audit.transactionLog'))
 
     // verbose
     this.verbose = config.get('audit.verboseScreenLogging')
@@ -24,8 +20,9 @@ class Audit extends EventEmitter {
    * @param {*} data
    */
   logEvent (event, data = {}) {
-    const maskedData = this.maskPrivateProperties(data)
-    this.eventLog.append({ event, maskedData })
+    const maskedData = this._maskPrivateProperties(data)
+    eventLog.append({ event, data: maskedData })
+
     console.log(event)
     if (this.verbose) {
       console.log(maskedData)
@@ -46,7 +43,7 @@ class Audit extends EventEmitter {
    * @param {*} data
    * @returns
    */
-  maskPrivateProperties (data) {
+  _maskPrivateProperties (data) {
     const keys = Object.keys(data)
     return keys.reduce((masked, key) => {
       // default to a straight copy
@@ -68,4 +65,4 @@ class Audit extends EventEmitter {
   }
 }
 
-module.exports = Audit
+module.exports = Logging

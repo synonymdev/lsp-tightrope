@@ -29,6 +29,9 @@ class Settings {
 
     if (id) {
       const ids = Array.isArray(id) ? id : [id]
+      if (ids.length > 1) {
+        ids.push(ids.join(':'))
+      }
       settings = ids.map((i) => this.idSettings.find(item => item.id === i)).reduce((prev, curr) => ({ ...prev, ...curr }), settings)
     }
 
