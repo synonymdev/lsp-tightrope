@@ -223,7 +223,7 @@ class Lightning extends Logging {
     try {
       const channelId = msg.channelId
       const amount = msg.tokens
-      const from = msg.srcNode
+      const paidTo = msg.paidTo
 
       // decode the payment request
       const request = msg.invoice
@@ -236,8 +236,8 @@ class Lightning extends Logging {
       }
 
       // Check the payment destination is what we think it should be
-      if (details.destination !== from) {
-        this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, requestDestination: from })
+      if (details.destination !== paidTo) {
+        this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, paidTo: paidTo })
         return false
       }
 
@@ -249,8 +249,10 @@ class Lightning extends Logging {
       }
 
       // Is this channel's remote peer the one the invoice is from (should be)
-      if (channelInfo.remotePublicKey !== from) {
-        this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, requestNode: from, channelNode: channelInfo.remotePublicKey })
+      if (channelInfo.remotePublicKey !== paidTo) {
+        this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
+        return false
+      }
         return false
       }
 

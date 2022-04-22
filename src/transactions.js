@@ -34,8 +34,8 @@ class Transactions {
   _toTransaction (obj) {
     // Defaults for everything we want
     const src = {
-      srcNode: null,
-      dstNode: null,
+      paidTo: null,
+      paidBy: null,
       channelId: null,
       amount: 0,
       invoice: null,
@@ -45,8 +45,8 @@ class Transactions {
 
     // then keep just what we need
     return {
-      srcNode: src.srcNode,
-      dstNode: src.dstNode,
+      paidTo: src.paidTo,
+      paidBy: src.paidBy,
       channelId: src.channelId,
       amount: src.amount,
       invoice: src.invoice,

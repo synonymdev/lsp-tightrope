@@ -243,12 +243,12 @@ class Tightrope extends Logging {
     if (owner) {
       // put this potential transaction into the audit log
       transactions.add({
-        srcNode: channel.localPublicKey,
-        dstNode: channel.remotePublicKey,
+        paidTo: channel.localPublicKey,
+        paidBy: channel.remotePublicKey,
         channelId: channel.id,
-        amount: tokens,
+        amount: +tokens,
         invoice: request,
-        state: 'requesting'
+        state: 'pending'
       })
 
       // and record the event
@@ -260,8 +260,8 @@ class Tightrope extends Logging {
         invoice: request,
         tokens,
         channelId: channel.id,
-        srcNode: channel.localPublicKey,
-        dstNode: channel.remotePublicKey
+        paidTo: channel.localPublicKey,
+        paidBy: channel.remotePublicKey
       })
     }
   }
