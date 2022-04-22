@@ -2,8 +2,10 @@ const BigNumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
 const Logging = require('./logging')
+const transactions = require('./transactions')
 const asyncFilter = require('./util/async-filter')
 const settings = require('./util/tightrope-settings')
+const timeToMilliseconds = require('./util/time-to-milliseconds')
 
 // https://github.com/alexbosworth/ln-service
 
@@ -145,26 +147,14 @@ class Lightning extends Logging {
    */
   async rebalanceChannel (channel, invoiceAmount) {
     try {
-      // Are we already in the middle to trying to rebalance this channel?
-      // If we are, just stop here and let the original attempt complete
-      const blocked = this.blockedPending.find((c) => c.id === channel.id)
-      if (blocked) {
-        if (blocked.until > Date.now()) {
-          this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
-          return
-        }
+      // Don't rebalance a channel too soon after starting another rebalance
+      if (await this.rateLimitRebalance(channel)) {
+        return
       }
-
-      // this will be the only attempt for a while
-      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
-      const blockUntil = Date.now() + (this.invoiceLifespan * 2)
-
-      // block for a few minutes (avoid overlapping invoices)
-      this.blockedPending = this.blockedPending.filter((c) => c.id !== channel.id)
-      this.blockedPending.push({ id: channel.id, until: blockUntil })
 
       // Create an invoice
       const tokens = invoiceAmount.toFixed(0)
+      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
       const invoice = await lnService.createInvoice({
         lnd: this.lnd,
         description: 'tightrope rebalance',
@@ -176,8 +166,34 @@ class Lightning extends Logging {
       this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
       this.emit('requestRebalance', channel, invoice.request, tokens)
     } catch (err) {
-      this.logError('rebalance channel failed', err)
+      this.logError('rebalance channel failed', err.message)
     }
+  }
+
+  /**
+   * Prevent the rebalance operation from happening too often
+   * @param {*} channel
+   * @returns true if you are rate limited and should not make another transaction just yet
+   */
+  async rateLimitRebalance (channel) {
+    // Are we already in the middle to trying to rebalance this channel?
+    // If we are, just stop here and let the original attempt complete
+
+    // First, clear out expired blocks
+    const now = Date.now()
+    this.blockedPending = this.blockedPending.filter((c) => c.until > now)
+
+    // See if we are blocked
+    const blocked = this.blockedPending.find((c) => c.id === channel.id)
+    if (blocked) {
+      this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
+      return true
+    }
+
+    // block for a few minutes (avoid overlapping invoices)
+    const timeBetweenPayments = settings('minTimeBetweenPayments', [this.alias, channel.id])
+    this.blockedPending.push({ id: channel.id, until: now + timeBetweenPayments })
+    return false
   }
 
   /**
@@ -253,6 +269,10 @@ class Lightning extends Logging {
         this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
         return false
       }
+
+      // Check we've not paid out too much recently
+      if (this.denyPayment(channelId, amount)) {
+        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
         return false
       }
 
@@ -262,6 +282,34 @@ class Lightning extends Logging {
       this.logError('Failed to determine if an invoice should be paid', { ...msg, error: err.message })
     }
 
+    return false
+  }
+
+  /**
+   * See if there are any reasons to deny the transaction from taking place.
+   * @param {*} channelId
+   * @param {*} amount
+   * @returns true if there is a problem and you should not attempt to complete the transaction
+   */
+  async denyPayment (channelId, amount) {
+    const now = Date.now()
+    const period = timeToMilliseconds(settings('limitsPeriod', [this.alias, channelId]))
+    const recent = await transactions.filter({ since: now - period })
+
+    // Too many recent transactions?
+    const maxTransactions = settings('maxTransactionsPerPeriod', [this.alias, channelId])
+    if (recent.length >= maxTransactions) {
+      return true
+    }
+
+    // too much money moved recently?
+    const maxTotalAmount = settings('maxAmountPerPeriod', [this.alias, channelId])
+    const sumOfTransactions = recent.reduce((total, t) => total.plus(t.amount), new BigNumber(0))
+    if (sumOfTransactions.plus(amount).isGreaterThan(maxTotalAmount)) {
+      return true
+    }
+
+    // all good - I guess you can do the transaction
     return false
   }
 

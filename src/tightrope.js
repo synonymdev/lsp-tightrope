@@ -226,7 +226,7 @@ class Tightrope extends Logging {
    */
   async onPaymentResult (remotePeer, msg) {
     // put this potential transaction into the audit log
-    transactions.add({ ...msg, state: msg.confirmed ? 'complete' : 'failed' })
+    transactions.add({ ...msg, amount: +msg.tokens, state: msg.confirmed ? 'complete' : 'failed' })
 
     this.logEvent('onPaymentResult', { remotePeer, ...msg })
     await this.lightning.confirmPayment(msg)
