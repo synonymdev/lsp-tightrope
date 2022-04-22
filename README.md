@@ -25,7 +25,7 @@ If parts of your cluster of Lightning nodes are managed by someone else, it migh
 
 Example:
 
-Alice has 2 lightning nodes (A and B). Each has many open channels, including 1 important channel between A and B that Alice wants to keep in balance to maintain liquidity between A and B. Alice sets up Tightrope, and adds the API credentials for A and B into the config. She also sets the secret in her Tightrope config to "correcthorsebatterystaple". She starts Tightrope and it will automatically find the channel between A and B and keeps it in constant balance.
+Alice has 2 lightning nodes (A and B). Each has many open channels, including 1 important channel between A and B that Alice wants to keep in balance to maintain liquidity between A and B. Alice sets up Tightrope, and adds the API credentials for A and B into the config. She also sets the secret in her Tightrope config to "correcthorsebatterystaple" (though please use a secure random password yourself). She starts Tightrope and it will automatically find the channel between A and B and keeps it in constant balance.
 
 Bob also runs a cluster of Lightning nodes (C, D and E). He also needs to maintain liquidity between his nodes and uses Tightrope to do this. His config contains details of all three of this nodes along with his own secret password.
 
@@ -39,13 +39,15 @@ Tightrope first connects to all the Lightning nodes listed in the config file. F
 
 Using the mechanism, Tightrope determines if any of the channels on a given node are actually channels to one of the other nodes in the cluster. If they are, it starts watching them. Whenever the channel is out of balance, an invoice is generated and sent to the peer that manages the Lightning node on the other side of the channel. Once validated, the invoice is paid, bringing the channel back into balance.
 
+## Audit Logging
+
+Tightrope also records events and transactions into an append-only log (A Hypercore). The logs provide a full history of events (such as peer discovery). The transaction log lists all payment attempts between nodes in the cluster and records their outcome.
+
 ## Settings
 
 The following values can be configured in the settings files. default.json defines the default values. Override or replace them in local.json
 
 * secret - this is the shared secret that the cluster will use. Pick a long and complex password
-* balance.deadzone - how far away from in-balance can a channel get before Tightrope will attempt to rebalance the channel. The default is 0.1 (10%)
-* refreshRateSeconds - the time (in seconds) between each check of the existing channels. At this interval, Tightrope will check channels that connect other lightning nodes in the cluster and if any are out of balance, it will initiate the process of rebalancing the channel.
 * lightningNodes - an array of lightning nodes to manage. For each node you will need to provide the following...
     * base64 encoded TLS Certificate
     * base64 encoded macaroon that has enough permissions to query channels, create and pay invoices
