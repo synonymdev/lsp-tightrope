@@ -1,3 +1,15 @@
+// Time format
+// Examples: 12 -> 12, 12s -> 12000, 12m -> 720000
+const regex = /^(([0-9]*[.])?[0-9]+)(d|h|m|s)?$/
+
+function unitsMultiple (unit) {
+  if (unit === 's') return 1000
+  if (unit === 'm') return 60 * 1000
+  if (unit === 'h') return 60 * 60 * 1000
+  if (unit === 'd') return 24 * 60 * 60 * 1000
+
+  return 1
+}
 
 /**
  * given a time and unit, return milliseconds
@@ -6,12 +18,7 @@
  * @returns
  */
 function delayByUnit (t, unit) {
-  if (unit === 's') return t * 1000
-  if (unit === 'm') return t * 60 * 1000
-  if (unit === 'h') return t * 60 * 60 * 1000
-  if (unit === 'd') return t * 24 * 60 * 60 * 1000
-
-  return t
+  return t * unitsMultiple(unit)
 }
 
 /**
@@ -25,7 +32,6 @@ function delayByUnit (t, unit) {
  * @returns {number}
  */
 module.exports = (time) => {
-  const regex = /^(([0-9]*[.])?[0-9]+)(d|h|m|s)?$/
   const m = regex.exec(time)
   if (m === null) return 0
 

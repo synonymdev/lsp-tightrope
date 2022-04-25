@@ -191,7 +191,7 @@ class Lightning extends Logging {
     }
 
     // block for a few minutes (avoid overlapping invoices)
-    const timeBetweenPayments = settings('minTimeBetweenPayments', [this.alias, channel.id])
+    const timeBetweenPayments = timeToMilliseconds(settings('minTimeBetweenPayments', [this.alias, channel.id]))
     this.blockedPending.push({ id: channel.id, until: now + timeBetweenPayments })
     return false
   }
@@ -271,8 +271,9 @@ class Lightning extends Logging {
       }
 
       // Check we've not paid out too much recently
-      if (this.denyPayment(channelId, amount)) {
-        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
+      const denyReason = await this.denyPaymentReason(channelId, amount)
+      if (denyReason !== null) {
+        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey, reason: denyReason })
         return false
       }
 
@@ -289,28 +290,34 @@ class Lightning extends Logging {
    * See if there are any reasons to deny the transaction from taking place.
    * @param {*} channelId
    * @param {*} amount
-   * @returns true if there is a problem and you should not attempt to complete the transaction
+   * @returns null if there is a problem, or a string with the reason the payment should be denied
    */
-  async denyPayment (channelId, amount) {
+  async denyPaymentReason (channelId, amount) {
+    // Work out how far back in time we should consider
     const now = Date.now()
-    const period = timeToMilliseconds(settings('limitsPeriod', [this.alias, channelId]))
-    const recent = await transactions.filter({ since: now - period })
+    const limitsPeriod = settings('limitsPeriod', [this.alias])
+    const period = timeToMilliseconds(limitsPeriod)
+    const rollingPeriod = settings('useRollingLimitsPeriod', [this.alias])
+    const since = rollingPeriod ? now - period : Math.floor(now / period) * period
+
+    // Find recent transactions
+    const recent = await transactions.filter({ since, paidBy: this.publicKey })
 
     // Too many recent transactions?
-    const maxTransactions = settings('maxTransactionsPerPeriod', [this.alias, channelId])
+    const maxTransactions = settings('maxTransactionsPerPeriod', [this.alias])
     if (recent.length >= maxTransactions) {
-      return true
+      return `${recent.length} transactions in last ${recent}ms. Limit is ${maxTransactions}`
     }
 
     // too much money moved recently?
-    const maxTotalAmount = settings('maxAmountPerPeriod', [this.alias, channelId])
+    const maxTotalAmount = settings('maxAmountPerPeriod', [this.alias])
     const sumOfTransactions = recent.reduce((total, t) => total.plus(t.amount), new BigNumber(0))
     if (sumOfTransactions.plus(amount).isGreaterThan(maxTotalAmount)) {
-      return true
+      return `${sumOfTransactions.plus(amount).toString()} tokens sent in last ${recent}ms. Limit is ${maxTotalAmount}`
     }
 
     // all good - I guess you can do the transaction
-    return false
+    return null
   }
 
   /**

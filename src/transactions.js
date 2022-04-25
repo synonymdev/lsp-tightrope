@@ -27,12 +27,19 @@ class Transactions {
   async filter (filter) {
     const since = filter.since || (Date.now() - timeToMilliseconds('1d'))
     const state = filter.state || 'complete'
+    const paidBy = filter.paidBy
 
     // Get all
-    const recent = await transactionLog.getRecent(1000)
+    let recent = await transactionLog.getRecent(1000)
 
     // Filter down to just the ones we need
-    return recent.filter((t) => t.timestamp > since && t.state === state)
+    recent = recent.filter((t) => t.timestamp > since && t.state === state)
+
+    if (paidBy) {
+      recent = recent.filter((t) => t.paidBy === paidBy)
+    }
+
+    return recent
   }
 
   async _cacheRecentTransaction () {
