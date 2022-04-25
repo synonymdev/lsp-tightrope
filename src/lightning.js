@@ -62,11 +62,11 @@ class Lightning extends Logging {
     this.alias = this.walletInfo.alias
 
     // Get the current list of channels
-    await this.refreshChannelList()
+    await this._refreshChannelList()
 
     // Start a timer to watch the channels
     const interval = settings('refreshRate', this.alias) * 1000
-    this.pollingTimer = setInterval(() => this.onPollChannels(), interval)
+    this.pollingTimer = setInterval(() => this._onPollChannels(), interval)
 
     // log it
     this.logEvent('lightningConnected', { alias: this.alias, publicKey: this.publicKey, lnVersion: this.walletInfo.version })
@@ -91,112 +91,6 @@ class Lightning extends Logging {
   }
 
   /**
-   * Called on a regular interval to see if any channels are out of balance
-   */
-  async onPollChannels () {
-    // get the channel list up to date
-    await this.refreshChannelList()
-
-    // look to rebalance things and remove channels that are no longer there.
-    this.watchList = await asyncFilter(this.watchList, async (id) => this.onConsiderChannelRebalance(id))
-  }
-
-  /**
-   * Check a specific channel on our watchlist to see if it is out of balance and in need of rebalancing
-   * @param {*} channelId
-   */
-  async onConsiderChannelRebalance (channelId) {
-    const channel = this.channels.find((c) => c.id === channelId)
-    if (!channel) {
-      // log the problem
-      this.logError('Watched channel missing', { alias: this.alias, publicKey: this.publicKey, channelId: channelId })
-
-      // asked to be removed from the watchlist
-      return false
-    }
-
-    if (channel.isActive) {
-      // Work out percentage balance that is local
-      const local = channel.localBalance.div(channel.capacity)
-
-      // find out the balance points for this channel, and any configured 'dead zone'
-      const balancePoint = settings('balancePoint', [this.alias, channelId])
-      const deadzone = settings('deadzone', [this.alias, channelId])
-      const rebalanceThreshold = Math.min(1, Math.max(0, balancePoint - deadzone))
-
-      if (local < rebalanceThreshold) {
-        // Work out how much to ask for
-        const targetBalance = channel.localBalance.plus(channel.remoteBalance).times(balancePoint)
-        const invoiceAmount = targetBalance.minus(channel.localBalance)
-
-        const maxTransactionSize = settings('maxTransactionSize', [this.alias, channelId])
-        const amount = BigNumber.min(invoiceAmount, maxTransactionSize)
-        if (amount.isPositive()) {
-          await this.rebalanceChannel(channel, amount)
-        }
-      }
-    }
-
-    return true
-  }
-
-  /**
-   * A channel we care about is out of balance - attempt to rebalance
-   * @param {*} channel
-   * @param {*} invoiceAmount
-   */
-  async rebalanceChannel (channel, invoiceAmount) {
-    try {
-      // Don't rebalance a channel too soon after starting another rebalance
-      if (await this.rateLimitRebalance(channel)) {
-        return
-      }
-
-      // Create an invoice
-      const tokens = invoiceAmount.toFixed(0)
-      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
-      const invoice = await lnService.createInvoice({
-        lnd: this.lnd,
-        description: 'tightrope rebalance',
-        expires_at: expiresAt.toISOString(),
-        tokens: tokens
-      })
-
-      // Ask for this invoice to be paid by the other side...
-      this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
-      this.emit('requestRebalance', channel, invoice.request, tokens)
-    } catch (err) {
-      this.logError('rebalance channel failed', err.message)
-    }
-  }
-
-  /**
-   * Prevent the rebalance operation from happening too often
-   * @param {*} channel
-   * @returns true if you are rate limited and should not make another transaction just yet
-   */
-  async rateLimitRebalance (channel) {
-    // Are we already in the middle to trying to rebalance this channel?
-    // If we are, just stop here and let the original attempt complete
-
-    // First, clear out expired blocks
-    const now = Date.now()
-    this.blockedPending = this.blockedPending.filter((c) => c.until > now)
-
-    // See if we are blocked
-    const blocked = this.blockedPending.find((c) => c.id === channel.id)
-    if (blocked) {
-      this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
-      return true
-    }
-
-    // block for a few minutes (avoid overlapping invoices)
-    const timeBetweenPayments = timeToMilliseconds(settings('minTimeBetweenPayments', [this.alias, channel.id]))
-    this.blockedPending.push({ id: channel.id, until: now + timeBetweenPayments })
-    return false
-  }
-
-  /**
    * Will attempt to pay the BOLT 11 invoice given
    * @param {*} invoice
    * @returns
@@ -204,7 +98,7 @@ class Lightning extends Logging {
   async payInvoice (msg) {
     try {
       // See if we should pay the invoice or not?
-      const shouldPay = await this.shouldPayInvoice(msg)
+      const shouldPay = await this._shouldPayInvoice(msg)
       if (shouldPay) {
         const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
         if (payment && payment.is_confirmed) {
@@ -231,11 +125,161 @@ class Lightning extends Logging {
   }
 
   /**
+   * Refresh the list of channels and look for a channel that connects to a
+   * lightning public key given
+   * @param {*} lnPublicKey
+   * @returns
+   */
+  async findChannelsFromPubKey (lnPublicKey) {
+    await this._refreshChannelList()
+    return this.channels.filter((c) => c.remotePublicKey === lnPublicKey)
+  }
+
+  /**
+   * Finds a channel from the channel id given
+   * @param {*} channelId
+   * @returns
+   */
+  async findChannelFromId (channelId) {
+    await this._refreshChannelList()
+    return this.channels.find((c) => c.id === channelId)
+  }
+
+  /**
+   * Start watching the channel id given. This is a channel that
+   * we will want to keep balanced, so it will be monitored and a rebalancing
+   * event triggered if it falls outside the limits.
+   * @param {*} channelId
+   */
+  watchChannel (channelId) {
+    this.unwatchChannel(channelId)
+    this.watchList.push(channelId)
+    this.logEvent('startWatchingChannel', { channelId, localAlias: this.alias })
+  }
+
+  /**
+   * Stop watching a channel
+   * @param {*} channelId
+   */
+  unwatchChannel (channelId) {
+    if (this.watchList.findIndex(c => c === channelId) !== -1) {
+      this.logEvent('stopWatchingChannel', { channelId, localAlias: this.alias })
+    }
+    this.watchList = this.watchList.filter(c => c !== channelId)
+  }
+
+  /**
+   * Called on a regular interval to see if any channels are out of balance
+   */
+  async _onPollChannels () {
+    // get the channel list up to date
+    await this._refreshChannelList()
+
+    // look to rebalance things and remove channels that are no longer there.
+    this.watchList = await asyncFilter(this.watchList, async (id) => this._onConsiderChannelRebalance(id))
+  }
+
+  /**
+   * Check a specific channel on our watchlist to see if it is out of balance and in need of rebalancing
+   * @param {*} channelId
+   */
+  async _onConsiderChannelRebalance (channelId) {
+    const channel = this.channels.find((c) => c.id === channelId)
+    if (!channel) {
+      // log the problem
+      this.logError('Watched channel missing', { alias: this.alias, publicKey: this.publicKey, channelId: channelId })
+
+      // asked to be removed from the watchlist
+      return false
+    }
+
+    if (channel.isActive) {
+      // Work out percentage balance that is local
+      const local = channel.localBalance.div(channel.capacity)
+
+      // find out the balance points for this channel, and any configured 'dead zone'
+      const balancePoint = settings('balancePoint', [this.alias, channelId])
+      const deadzone = settings('deadzone', [this.alias, channelId])
+      const rebalanceThreshold = Math.min(1, Math.max(0, balancePoint - deadzone))
+
+      if (local < rebalanceThreshold) {
+        // Work out how much to ask for
+        const targetBalance = channel.localBalance.plus(channel.remoteBalance).times(balancePoint)
+        const invoiceAmount = targetBalance.minus(channel.localBalance)
+
+        const maxTransactionSize = settings('maxTransactionSize', [this.alias, channelId])
+        const amount = BigNumber.min(invoiceAmount, maxTransactionSize)
+        if (amount.isPositive()) {
+          await this._rebalanceChannel(channel, amount)
+        }
+      }
+    }
+
+    return true
+  }
+
+  /**
+   * A channel we care about is out of balance - attempt to rebalance
+   * @param {*} channel
+   * @param {*} invoiceAmount
+   */
+  async _rebalanceChannel (channel, invoiceAmount) {
+    try {
+      // Don't rebalance a channel too soon after starting another rebalance
+      if (await this._rateLimitRebalance(channel)) {
+        return
+      }
+
+      // Create an invoice
+      const tokens = invoiceAmount.toFixed(0)
+      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
+      const invoice = await lnService.createInvoice({
+        lnd: this.lnd,
+        description: 'tightrope rebalance',
+        expires_at: expiresAt.toISOString(),
+        tokens: tokens
+      })
+
+      // Ask for this invoice to be paid by the other side...
+      this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
+      this.emit('requestRebalance', channel, invoice.request, tokens)
+    } catch (err) {
+      this.logError('rebalance channel failed', err.message)
+    }
+  }
+
+  /**
+   * Prevent the rebalance operation from happening too often
+   * @param {*} channel
+   * @returns true if you are rate limited and should not make another transaction just yet
+   */
+  async _rateLimitRebalance (channel) {
+    // Are we already in the middle to trying to rebalance this channel?
+    // If we are, just stop here and let the original attempt complete
+
+    // First, clear out expired blocks
+    const now = Date.now()
+    this.blockedPending = this.blockedPending.filter((c) => c.until > now)
+
+    // See if we are blocked
+    const blocked = this.blockedPending.find((c) => c.id === channel.id)
+    if (blocked) {
+      this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
+      return true
+    }
+
+    // block for a few minutes (avoid overlapping invoices)
+    const timeBetweenPayments = timeToMilliseconds(settings('minTimeBetweenPayments', [this.alias, channel.id]))
+    this.blockedPending.push({ id: channel.id, until: now + timeBetweenPayments })
+    return false
+  }
+
+  /**
    * Determine if we should pay the given invoice details
    * @param {*} msg
    * @returns
    */
-  async shouldPayInvoice (msg) {
+  async _shouldPayInvoice (msg) {
     try {
       const channelId = msg.channelId
       const amount = msg.tokens
@@ -271,7 +315,7 @@ class Lightning extends Logging {
       }
 
       // Check we've not paid out too much recently
-      const denyReason = await this.denyPaymentReason(channelId, amount)
+      const denyReason = await this._denyPaymentReason(channelId, amount)
       if (denyReason !== null) {
         this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey, reason: denyReason })
         return false
@@ -292,7 +336,7 @@ class Lightning extends Logging {
    * @param {*} amount
    * @returns null if there is a problem, or a string with the reason the payment should be denied
    */
-  async denyPaymentReason (channelId, amount) {
+  async _denyPaymentReason (channelId, amount) {
     // Work out how far back in time we should consider
     const now = Date.now()
     const limitsPeriod = settings('limitsPeriod', [this.alias])
@@ -336,7 +380,7 @@ class Lightning extends Logging {
    * Asks the lightning node for the current list of channels and keeps the relevant data
    * @returns - an array of channels
    */
-  async refreshChannelList () {
+  async _refreshChannelList () {
     try {
       if (!this.lnd) {
         this.channels = []
@@ -363,50 +407,6 @@ class Lightning extends Logging {
     }
 
     return this.channels
-  }
-
-  /**
-   * Refresh the list of channels and look for a channel that connects to a
-   * lightning public key given
-   * @param {*} lnPublicKey
-   * @returns
-   */
-  async findChannelsFromPubKey (lnPublicKey) {
-    await this.refreshChannelList()
-    return this.channels.filter((c) => c.remotePublicKey === lnPublicKey)
-  }
-
-  /**
-   * Finds a channel from the channel id given
-   * @param {*} channelId
-   * @returns
-   */
-  async findChannelFromId (channelId) {
-    await this.refreshChannelList()
-    return this.channels.find((c) => c.id === channelId)
-  }
-
-  /**
-   * Start watching the channel id given. This is a channel that
-   * we will want to keep balanced, so it will be monitored and a rebalancing
-   * event triggered if it falls outside the limits.
-   * @param {*} channelId
-   */
-  watchChannel (channelId) {
-    this.unwatchChannel(channelId)
-    this.watchList.push(channelId)
-    this.logEvent('startWatchingChannel', { channelId, localAlias: this.alias })
-  }
-
-  /**
-   * Stop watching a channel
-   * @param {*} channelId
-   */
-  unwatchChannel (channelId) {
-    if (this.watchList.findIndex(c => c === channelId) !== -1) {
-      this.logEvent('stopWatchingChannel', { channelId, localAlias: this.alias })
-    }
-    this.watchList = this.watchList.filter(c => c !== channelId)
   }
 }
 

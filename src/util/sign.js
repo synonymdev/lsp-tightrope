@@ -5,7 +5,7 @@ const crypto = require('crypto')
  * @param {*} params
  * @returns
  */
-function paramsToStringToSign (params) {
+function _paramsToStringToSign (params) {
   return Object.keys(params)
     .sort()
     .map(key => `${key}=${params[key]}`)
@@ -18,7 +18,7 @@ function paramsToStringToSign (params) {
  * @param {*} message
  * @returns
  */
-function signMessage (secret, message) {
+function _signMessage (secret, message) {
   return crypto.createHmac('sha256', secret).update(message).digest('hex')
 }
 
@@ -31,5 +31,5 @@ function signMessage (secret, message) {
  */
 module.exports = (secret, timestamp, publicKey, params = {}) => {
   const toSign = { ...params, timestamp, publicKey }
-  return signMessage(secret, paramsToStringToSign(toSign))
+  return _signMessage(secret, _paramsToStringToSign(toSign))
 }

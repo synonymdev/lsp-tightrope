@@ -2,7 +2,7 @@
 // Examples: 12 -> 12, 12s -> 12000, 12m -> 720000
 const regex = /^(([0-9]*[.])?[0-9]+)(d|h|m|s)?$/
 
-function unitsMultiple (unit) {
+function _unitsMultiple (unit) {
   if (unit === 's') return 1000
   if (unit === 'm') return 60 * 1000
   if (unit === 'h') return 60 * 60 * 1000
@@ -17,8 +17,8 @@ function unitsMultiple (unit) {
  * @param {*} unit
  * @returns
  */
-function delayByUnit (t, unit) {
-  return t * unitsMultiple(unit)
+function _delayByUnit (t, unit) {
+  return t * _unitsMultiple(unit)
 }
 
 /**
@@ -36,5 +36,5 @@ module.exports = (time) => {
   if (m === null) return 0
 
   const delay = Math.max(parseFloat(m[1]), 0)
-  return Math.floor(delayByUnit(delay, m[3]))
+  return Math.floor(_delayByUnit(delay, m[3]))
 }
