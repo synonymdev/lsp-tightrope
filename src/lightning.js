@@ -2,8 +2,10 @@ const BigNumber = require('bignumber.js')
 const lnService = require('ln-service')
 const { clearInterval } = require('timers')
 const Logging = require('./logging')
+const transactions = require('./transactions')
 const asyncFilter = require('./util/async-filter')
 const settings = require('./util/tightrope-settings')
+const timeToMilliseconds = require('./util/time-to-milliseconds')
 
 // https://github.com/alexbosworth/ln-service
 
@@ -60,11 +62,11 @@ class Lightning extends Logging {
     this.alias = this.walletInfo.alias
 
     // Get the current list of channels
-    await this.refreshChannelList()
+    await this._refreshChannelList()
 
     // Start a timer to watch the channels
     const interval = settings('refreshRate', this.alias) * 1000
-    this.pollingTimer = setInterval(() => this.onPollChannels(), interval)
+    this.pollingTimer = setInterval(() => this._onPollChannels(), interval)
 
     // log it
     this.logEvent('lightningConnected', { alias: this.alias, publicKey: this.publicKey, lnVersion: this.walletInfo.version })
@@ -89,21 +91,108 @@ class Lightning extends Logging {
   }
 
   /**
+   * Will attempt to pay the BOLT 11 invoice given
+   * @param {*} invoice
+   * @returns
+   */
+  async payInvoice (msg) {
+    try {
+      // See if we should pay the invoice or not?
+      const shouldPay = await this._shouldPayInvoice(msg)
+      if (!shouldPay.allow) {
+        return {
+          ...shouldPay,
+          paymentId: null,
+          confirmed: false,
+          confirmedAt: null
+        }
+      }
+
+      const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
+      if (payment && payment.is_confirmed) {
+        this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
+        return {
+          ...shouldPay,
+          paymentId: payment.id || null,
+          confirmed: payment.is_confirmed || false,
+          confirmedAt: payment.confirmed_at || null
+        }
+      }
+
+      this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, ...shouldPay })
+    } catch (err) {
+      this.logError('Failed to pay invoice', { ...msg, error: err.message })
+    }
+
+    // No, didn't pay
+    return {
+      reason: 'payment failed',
+      paymentId: null,
+      confirmed: false,
+      confirmedAt: null
+    }
+  }
+
+  /**
+   * Refresh the list of channels and look for a channel that connects to a
+   * lightning public key given
+   * @param {*} lnPublicKey
+   * @returns
+   */
+  async findChannelsFromPubKey (lnPublicKey) {
+    await this._refreshChannelList()
+    return this.channels.filter((c) => c.remotePublicKey === lnPublicKey)
+  }
+
+  /**
+   * Finds a channel from the channel id given
+   * @param {*} channelId
+   * @returns
+   */
+  async findChannelFromId (channelId) {
+    await this._refreshChannelList()
+    return this.channels.find((c) => c.id === channelId)
+  }
+
+  /**
+   * Start watching the channel id given. This is a channel that
+   * we will want to keep balanced, so it will be monitored and a rebalancing
+   * event triggered if it falls outside the limits.
+   * @param {*} channelId
+   */
+  watchChannel (channelId) {
+    this.unwatchChannel(channelId)
+    this.watchList.push(channelId)
+    this.logEvent('startWatchingChannel', { channelId, localAlias: this.alias })
+  }
+
+  /**
+   * Stop watching a channel
+   * @param {*} channelId
+   */
+  unwatchChannel (channelId) {
+    if (this.watchList.findIndex(c => c === channelId) !== -1) {
+      this.logEvent('stopWatchingChannel', { channelId, localAlias: this.alias })
+    }
+    this.watchList = this.watchList.filter(c => c !== channelId)
+  }
+
+  /**
    * Called on a regular interval to see if any channels are out of balance
    */
-  async onPollChannels () {
+  async _onPollChannels () {
     // get the channel list up to date
-    await this.refreshChannelList()
+    await this._refreshChannelList()
 
     // look to rebalance things and remove channels that are no longer there.
-    this.watchList = await asyncFilter(this.watchList, async (id) => this.onConsiderChannelRebalance(id))
+    this.watchList = await asyncFilter(this.watchList, async (id) => this._onConsiderChannelRebalance(id))
   }
 
   /**
    * Check a specific channel on our watchlist to see if it is out of balance and in need of rebalancing
    * @param {*} channelId
    */
-  async onConsiderChannelRebalance (channelId) {
+  async _onConsiderChannelRebalance (channelId) {
     const channel = this.channels.find((c) => c.id === channelId)
     if (!channel) {
       // log the problem
@@ -130,7 +219,7 @@ class Lightning extends Logging {
         const maxTransactionSize = settings('maxTransactionSize', [this.alias, channelId])
         const amount = BigNumber.min(invoiceAmount, maxTransactionSize)
         if (amount.isPositive()) {
-          await this.rebalanceChannel(channel, amount)
+          await this._rebalanceChannel(channel, amount)
         }
       }
     }
@@ -143,28 +232,16 @@ class Lightning extends Logging {
    * @param {*} channel
    * @param {*} invoiceAmount
    */
-  async rebalanceChannel (channel, invoiceAmount) {
+  async _rebalanceChannel (channel, invoiceAmount) {
     try {
-      // Are we already in the middle to trying to rebalance this channel?
-      // If we are, just stop here and let the original attempt complete
-      const blocked = this.blockedPending.find((c) => c.id === channel.id)
-      if (blocked) {
-        if (blocked.until > Date.now()) {
-          this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
-          return
-        }
+      // Don't rebalance a channel too soon after starting another rebalance
+      if (await this._rateLimitRebalance(channel)) {
+        return
       }
-
-      // this will be the only attempt for a while
-      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
-      const blockUntil = Date.now() + (this.invoiceLifespan * 2)
-
-      // block for a few minutes (avoid overlapping invoices)
-      this.blockedPending = this.blockedPending.filter((c) => c.id !== channel.id)
-      this.blockedPending.push({ id: channel.id, until: blockUntil })
 
       // Create an invoice
       const tokens = invoiceAmount.toFixed(0)
+      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
       const invoice = await lnService.createInvoice({
         lnd: this.lnd,
         description: 'tightrope rebalance',
@@ -176,42 +253,34 @@ class Lightning extends Logging {
       this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
       this.emit('requestRebalance', channel, invoice.request, tokens)
     } catch (err) {
-      this.logError('rebalance channel failed', err)
+      this.logError('rebalance channel failed', err.message)
     }
   }
 
   /**
-   * Will attempt to pay the BOLT 11 invoice given
-   * @param {*} invoice
-   * @returns
+   * Prevent the rebalance operation from happening too often
+   * @param {*} channel
+   * @returns true if you are rate limited and should not make another transaction just yet
    */
-  async payInvoice (msg) {
-    try {
-      // See if we should pay the invoice or not?
-      const shouldPay = await this.shouldPayInvoice(msg)
-      if (shouldPay) {
-        const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
-        if (payment && payment.is_confirmed) {
-          this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
-          return {
-            paymentId: payment.id || null,
-            confirmed: payment.is_confirmed || false,
-            confirmedAt: payment.confirmed_at || null
-          }
-        } else {
-          this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice })
-        }
-      }
-    } catch (err) {
-      this.logError('Failed to pay invoice', { ...msg, error: err.message })
+  async _rateLimitRebalance (channel) {
+    // Are we already in the middle to trying to rebalance this channel?
+    // If we are, just stop here and let the original attempt complete
+
+    // First, clear out expired blocks
+    const now = Date.now()
+    this.blockedPending = this.blockedPending.filter((c) => c.until > now)
+
+    // See if we are blocked
+    const blocked = this.blockedPending.find((c) => c.id === channel.id)
+    if (blocked) {
+      // this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
+      return true
     }
 
-    // No, didn't pay
-    return {
-      paymentId: null,
-      confirmed: false,
-      confirmedAt: null
-    }
+    // block for a few minutes (avoid overlapping invoices)
+    const timeBetweenPayments = timeToMilliseconds(settings('minTimeBetweenPayments', [this.alias, channel.id]))
+    this.blockedPending.push({ id: channel.id, until: now + timeBetweenPayments })
+    return false
   }
 
   /**
@@ -219,11 +288,11 @@ class Lightning extends Logging {
    * @param {*} msg
    * @returns
    */
-  async shouldPayInvoice (msg) {
+  async _shouldPayInvoice (msg) {
     try {
       const channelId = msg.channelId
       const amount = msg.tokens
-      const from = msg.srcNode
+      const paidTo = msg.paidTo
 
       // decode the payment request
       const request = msg.invoice
@@ -232,35 +301,82 @@ class Lightning extends Logging {
       // Check the amount matches
       if (+details.tokens !== +amount) {
         this.logError('Rejected invoice as amount differs', { invoice: request, invoiceAmount: details.tokens, requestAmount: amount })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Check the payment destination is what we think it should be
-      if (details.destination !== from) {
-        this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, requestDestination: from })
-        return false
+      if (details.destination !== paidTo) {
+        this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, paidTo: paidTo })
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Look up the channel id locally and check that the src and destination of the channel match our data
       const channelInfo = await this.findChannelFromId(channelId)
       if (!channelInfo) {
         this.logError('Rejected invoice as channel was not found locally', { invoice: request, channelId })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Is this channel's remote peer the one the invoice is from (should be)
-      if (channelInfo.remotePublicKey !== from) {
-        this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, requestNode: from, channelNode: channelInfo.remotePublicKey })
-        return false
+      if (channelInfo.remotePublicKey !== paidTo) {
+        this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
+        return { allow: false, reason: 'invalid request' }
       }
 
-      // Can't find a good reason not to pay it, so pay it
-      return true
+      // Check we've not paid out too much recently
+      const denyReason = await this._denyPaymentReason(channelId, amount)
+      if (!denyReason.allow) {
+        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey, reason: denyReason.reason })
+      }
+
+      return denyReason
     } catch (err) {
       this.logError('Failed to determine if an invoice should be paid', { ...msg, error: err.message })
     }
 
     return false
+  }
+
+  /**
+   * See if there are any reasons to deny the transaction from taking place.
+   * @param {*} channelId
+   * @param {*} amount
+   * @returns null if there is a problem, or a string with the reason the payment should be denied
+   */
+  async _denyPaymentReason (channelId, amount) {
+    // Work out how far back in time we should consider
+    const now = Date.now()
+    const limitsPeriod = settings('limitsPeriod', [this.alias])
+    const period = timeToMilliseconds(limitsPeriod)
+    const rollingPeriod = settings('useRollingLimitsPeriod', [this.alias])
+    const since = rollingPeriod ? now - period : Math.floor(now / period) * period
+
+    // Find recent transactions
+    const recent = await transactions.filter({ since, paidBy: this.publicKey })
+
+    // Too many recent transactions?
+    const maxTransactions = settings('maxTransactionsPerPeriod', [this.alias])
+    if (recent.length >= maxTransactions) {
+      return {
+        allow: false,
+        reason: `${recent.length} transactions in last ${limitsPeriod}. Limit is ${maxTransactions}`,
+        retryAt: since + period + 1
+      }
+    }
+
+    // too much money moved recently?
+    const maxTotalAmount = settings('maxAmountPerPeriod', [this.alias])
+    const sumOfTransactions = recent.reduce((total, t) => total.plus(t.amount), new BigNumber(0))
+    if (sumOfTransactions.plus(amount).isGreaterThan(maxTotalAmount)) {
+      return {
+        allow: false,
+        reason: `${sumOfTransactions.plus(amount).toString()} tokens sent in last ${recent}ms. Limit is ${maxTotalAmount}`,
+        retryAt: since + period + 1
+      }
+    }
+
+    // all good - I guess you can do the transaction
+    return { allow: true }
   }
 
   /**
@@ -270,8 +386,12 @@ class Lightning extends Logging {
    * @param {*} result
    */
   async confirmPayment (result) {
-    if (result.confirmed) {
-      this.blockedPending = this.blockedPending.filter((c) => c.id !== result.channelId)
+    this.blockedPending = this.blockedPending.filter((c) => c.id !== result.channelId)
+    if (!result.confirmed) {
+      // failed. If there is a retryAt property, then we can wait until then before we attempt to rebalance here again
+      if (result.retryAt) {
+        this.blockedPending.push({ id: result.channelId, until: result.retryAt })
+      }
     }
   }
 
@@ -279,7 +399,7 @@ class Lightning extends Logging {
    * Asks the lightning node for the current list of channels and keeps the relevant data
    * @returns - an array of channels
    */
-  async refreshChannelList () {
+  async _refreshChannelList () {
     try {
       if (!this.lnd) {
         this.channels = []
@@ -306,50 +426,6 @@ class Lightning extends Logging {
     }
 
     return this.channels
-  }
-
-  /**
-   * Refresh the list of channels and look for a channel that connects to a
-   * lightning public key given
-   * @param {*} lnPublicKey
-   * @returns
-   */
-  async findChannelsFromPubKey (lnPublicKey) {
-    await this.refreshChannelList()
-    return this.channels.filter((c) => c.remotePublicKey === lnPublicKey)
-  }
-
-  /**
-   * Finds a channel from the channel id given
-   * @param {*} channelId
-   * @returns
-   */
-  async findChannelFromId (channelId) {
-    await this.refreshChannelList()
-    return this.channels.find((c) => c.id === channelId)
-  }
-
-  /**
-   * Start watching the channel id given. This is a channel that
-   * we will want to keep balanced, so it will be monitored and a rebalancing
-   * event triggered if it falls outside the limits.
-   * @param {*} channelId
-   */
-  watchChannel (channelId) {
-    this.unwatchChannel(channelId)
-    this.watchList.push(channelId)
-    this.logEvent('startWatchingChannel', { channelId, localAlias: this.alias })
-  }
-
-  /**
-   * Stop watching a channel
-   * @param {*} channelId
-   */
-  unwatchChannel (channelId) {
-    if (this.watchList.findIndex(c => c === channelId) !== -1) {
-      this.logEvent('stopWatchingChannel', { channelId, localAlias: this.alias })
-    }
-    this.watchList = this.watchList.filter(c => c !== channelId)
   }
 }
 

@@ -18,7 +18,7 @@ class Tightrope extends Logging {
     this.secret = config.get('secret')
 
     // We generate a topic from the secret...
-    this.topic = this.sha256(this.secret)
+    this.topic = this._sha256(this.secret)
     this.topicBase58 = bs58.encode(this.topic)
 
     // The hyperswarm (created in connect)
@@ -44,7 +44,7 @@ class Tightrope extends Logging {
       // Connect to the lightning node
       this.lightning = new Lightning(this.lnNodeInfo)
       await this.lightning.connect()
-      this.lightning.on('requestRebalance', (id, request, tokens) => this.onRequestRebalance(id, request, tokens))
+      this.lightning.on('requestRebalance', (id, request, tokens) => this._onRequestRebalance(id, request, tokens))
 
       // Create a new one
       const swarm = new Hyperswarm()
@@ -52,7 +52,7 @@ class Tightrope extends Logging {
       this.myPublicKey = bs58.encode(swarm.keyPair.publicKey)
 
       // Add handlers
-      swarm.on('connection', (socket, peerInfo) => this.onOpenConnection(socket, peerInfo))
+      swarm.on('connection', (socket, peerInfo) => this._onOpenConnection(socket, peerInfo))
 
       // join the hyperswarm on the topic we derived from the secret
       swarm.join(this.topic)
@@ -95,7 +95,7 @@ class Tightrope extends Logging {
    * @param {*} socket
    * @param {*} peerInfo
    */
-  onOpenConnection (socket, peerInfo) {
+  _onOpenConnection (socket, peerInfo) {
     // swarm1 will receive server connections
     const remotePublicKey = bs58.encode(peerInfo.publicKey)
     this.logEvent('peerConnected', { remotePeer: remotePublicKey })
@@ -105,24 +105,24 @@ class Tightrope extends Logging {
     socket.setTimeout(7000)
 
     // add it to the list of open connections
-    this.addActiveConnection(remotePublicKey, socket)
+    this._addActiveConnection(remotePublicKey, socket)
 
     // handle data
-    socket.on('data', data => this.onMessage(remotePublicKey, data.toString()))
+    socket.on('data', data => this._onMessage(remotePublicKey, data.toString()))
 
     socket.on('end', () => { socket.end() })
-    socket.on('close', () => this.onCloseConnection(remotePublicKey))
+    socket.on('close', () => this._onCloseConnection(remotePublicKey))
     socket.on('error', (err) => this.logError('Socket error', { remotePeer: remotePublicKey, message: err.message }))
 
-    this.sendMessage(remotePublicKey, { type: 'hello', publicKey: this.lightning.publicKey, alias: this.lightning.alias })
+    this._sendMessage(remotePublicKey, { type: 'hello', publicKey: this.lightning.publicKey, alias: this.lightning.alias })
   }
 
   /**
    * Called when the socket connection to a peer is closed for some reason
    * @param {*} remotePublicKey
    */
-  onCloseConnection (remotePeer) {
-    this.removeActiveConnection(remotePeer)
+  _onCloseConnection (remotePeer) {
+    this._removeActiveConnection(remotePeer)
     this.logEvent('peerDisconnected', { remotePeer })
   }
 
@@ -131,7 +131,7 @@ class Tightrope extends Logging {
    * Validates that the message has been correctly signed
    * @param {*} data
    */
-  async onMessage (remotePeer, data) {
+  async _onMessage (remotePeer, data) {
     try {
       const obj = JSON.parse(data)
 
@@ -153,15 +153,15 @@ class Tightrope extends Logging {
       // do something
       switch (obj.message.type) {
         case 'hello':
-          await this.onHello(remotePeer, obj.message)
+          await this._onHello(remotePeer, obj.message)
           break
 
         case 'payInvoice':
-          await this.onPayInvoice(remotePeer, obj.message)
+          await this._onPayInvoice(remotePeer, obj.message)
           break
 
         case 'paymentResult':
-          await this.onPaymentResult(remotePeer, obj.message)
+          await this._onPaymentResult(remotePeer, obj.message)
           break
 
         default:
@@ -178,7 +178,7 @@ class Tightrope extends Logging {
    * @param {*} remotePeer
    * @param {*} msg
    */
-  async onHello (remotePeer, msg) {
+  async _onHello (remotePeer, msg) {
     this.logEvent('peerHello', { remotePeer, publicKey: msg.publicKey, alias: msg.alias })
 
     // Discover if we have any channels open with this node
@@ -212,10 +212,10 @@ class Tightrope extends Logging {
    * @param {*} remotePeer
    * @param {*} msg
    */
-  async onPayInvoice (remotePeer, msg) {
+  async _onPayInvoice (remotePeer, msg) {
     this.logEvent('onPayInvoice', { channelId: msg.channelId, invoice: msg.invoice, amount: msg.tokens })
     const result = await this.lightning.payInvoice(msg)
-    this.sendMessage(remotePeer, { ...msg, ...result, type: 'paymentResult' })
+    this._sendMessage(remotePeer, { ...msg, ...result, type: 'paymentResult' })
   }
 
   /**
@@ -224,9 +224,9 @@ class Tightrope extends Logging {
    * @param {*} remotePeer
    * @param {*} msg
    */
-  async onPaymentResult (remotePeer, msg) {
+  async _onPaymentResult (remotePeer, msg) {
     // put this potential transaction into the audit log
-    transactions.add({ ...msg, state: msg.confirmed ? 'complete' : 'failed' })
+    transactions.add({ ...msg, amount: +msg.tokens, state: msg.confirmed ? 'complete' : 'failed' })
 
     this.logEvent('onPaymentResult', { remotePeer, ...msg })
     await this.lightning.confirmPayment(msg)
@@ -238,30 +238,30 @@ class Tightrope extends Logging {
    * @param {*} request - Bolt 11 encoded invoice
    * @param {*} tokens - how much was it for
    */
-  async onRequestRebalance (channel, request, tokens) {
+  async _onRequestRebalance (channel, request, tokens) {
     const owner = this.channelOwners.find((c) => c.channelId === channel.id)
     if (owner) {
       // put this potential transaction into the audit log
       transactions.add({
-        srcNode: channel.localPublicKey,
-        dstNode: channel.remotePublicKey,
+        paidTo: channel.localPublicKey,
+        paidBy: channel.remotePublicKey,
         channelId: channel.id,
-        amount: tokens,
+        amount: +tokens,
         invoice: request,
-        state: 'requesting'
+        state: 'pending'
       })
 
       // and record the event
       this.logEvent('onRequestRebalance', { remotePeer: owner.remotePeer, invoice: request, amount: tokens, channelId: channel.id })
 
       // finally ask for the invoice to be paid by the other peer
-      this.sendMessage(owner.remotePeer, {
+      this._sendMessage(owner.remotePeer, {
         type: 'payInvoice',
         invoice: request,
         tokens,
         channelId: channel.id,
-        srcNode: channel.localPublicKey,
-        dstNode: channel.remotePublicKey
+        paidTo: channel.localPublicKey,
+        paidBy: channel.remotePublicKey
       })
     }
   }
@@ -272,8 +272,8 @@ class Tightrope extends Logging {
    * @param {*} message
    * @returns
    */
-  sendMessage (to, message) {
-    const socket = this.findConnection(to)
+  _sendMessage (to, message) {
+    const socket = this._findConnection(to)
     if (!socket) {
       this.logError('Trying to send a message to unknown peer', { remotePeer: to, message })
       return
@@ -289,8 +289,8 @@ class Tightrope extends Logging {
    * @param {*} remotePublicKey
    * @param {*} socket
    */
-  addActiveConnection (remotePublicKey, socket) {
-    this.removeActiveConnection(remotePublicKey)
+  _addActiveConnection (remotePublicKey, socket) {
+    this._removeActiveConnection(remotePublicKey)
     this.activeConnections.push({ remotePublicKey, socket })
   }
 
@@ -298,7 +298,7 @@ class Tightrope extends Logging {
    * Removes an active socket connection from the list (eg when it is being closed)
    * @param {*} remotePublicKey
    */
-  removeActiveConnection (remotePublicKey) {
+  _removeActiveConnection (remotePublicKey) {
     this.activeConnections = this.activeConnections.filter(c => c.remotePublicKey !== remotePublicKey)
 
     // also, remove and channels we were watching that belongs to this peer
@@ -317,7 +317,7 @@ class Tightrope extends Logging {
    * @param {*} remotePublicKey
    * @returns
    */
-  findConnection (remotePublicKey) {
+  _findConnection (remotePublicKey) {
     const result = this.activeConnections.find(c => c.remotePublicKey === remotePublicKey)
     if (result) {
       return result.socket
@@ -331,7 +331,7 @@ class Tightrope extends Logging {
    * @param {*} message
    * @returns
    */
-  sha256 (message) {
+  _sha256 (message) {
     return crypto.createHash('sha256').update(message).digest()
   }
 }

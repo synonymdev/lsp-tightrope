@@ -1,4 +1,5 @@
 const transactionLog = require('./audit/transaction-log')
+const timeToMilliseconds = require('./util/time-to-milliseconds')
 
 class Transactions {
   constructor () {
@@ -17,8 +18,28 @@ class Transactions {
     return transactionLog.append(this._toTransaction(transaction))
   }
 
-  filter (filter) {
-    // const { from, to, since } = filter
+  /**
+   * Find some sub-set of recent transactions
+   * Optional criteria { since: millisecondTimestamp, state: 'complete'|'pending'|'failed' }
+   * @param {*} filter
+   * @returns
+   */
+  async filter (filter) {
+    const since = filter.since || (Date.now() - timeToMilliseconds('1d'))
+    const state = filter.state || 'complete'
+    const paidBy = filter.paidBy
+
+    // Get all
+    let recent = await transactionLog.getRecent(1000)
+
+    // Filter down to just the ones we need
+    recent = recent.filter((t) => t.timestamp > since && t.state === state)
+
+    if (paidBy) {
+      recent = recent.filter((t) => t.paidBy === paidBy)
+    }
+
+    return recent
   }
 
   async _cacheRecentTransaction () {
@@ -34,8 +55,8 @@ class Transactions {
   _toTransaction (obj) {
     // Defaults for everything we want
     const src = {
-      srcNode: null,
-      dstNode: null,
+      paidTo: null,
+      paidBy: null,
       channelId: null,
       amount: 0,
       invoice: null,
@@ -45,8 +66,8 @@ class Transactions {
 
     // then keep just what we need
     return {
-      srcNode: src.srcNode,
-      dstNode: src.dstNode,
+      paidTo: src.paidTo,
+      paidBy: src.paidBy,
       channelId: src.channelId,
       amount: src.amount,
       invoice: src.invoice,
