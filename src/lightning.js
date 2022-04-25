@@ -99,25 +99,34 @@ class Lightning extends Logging {
     try {
       // See if we should pay the invoice or not?
       const shouldPay = await this._shouldPayInvoice(msg)
-      if (shouldPay) {
-        const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
-        if (payment && payment.is_confirmed) {
-          this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
-          return {
-            paymentId: payment.id || null,
-            confirmed: payment.is_confirmed || false,
-            confirmedAt: payment.confirmed_at || null
-          }
-        } else {
-          this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice })
+      if (!shouldPay.allow) {
+        return {
+          ...shouldPay,
+          paymentId: null,
+          confirmed: false,
+          confirmedAt: null
         }
       }
+
+      const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
+      if (payment && payment.is_confirmed) {
+        this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
+        return {
+          ...shouldPay,
+          paymentId: payment.id || null,
+          confirmed: payment.is_confirmed || false,
+          confirmedAt: payment.confirmed_at || null
+        }
+      }
+
+      this.logEvent('paymentFailed', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, ...shouldPay })
     } catch (err) {
       this.logError('Failed to pay invoice', { ...msg, error: err.message })
     }
 
     // No, didn't pay
     return {
+      reason: 'payment failed',
       paymentId: null,
       confirmed: false,
       confirmedAt: null
@@ -264,7 +273,7 @@ class Lightning extends Logging {
     // See if we are blocked
     const blocked = this.blockedPending.find((c) => c.id === channel.id)
     if (blocked) {
-      this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
+      // this.logEvent('alreadyBalancing', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, timeout: (blocked.until - Date.now()) / 1000 })
       return true
     }
 
@@ -292,37 +301,35 @@ class Lightning extends Logging {
       // Check the amount matches
       if (+details.tokens !== +amount) {
         this.logError('Rejected invoice as amount differs', { invoice: request, invoiceAmount: details.tokens, requestAmount: amount })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Check the payment destination is what we think it should be
       if (details.destination !== paidTo) {
         this.logError('Rejected invoice as payment destination does not match', { invoice: request, invoiceDestination: details.destination, paidTo: paidTo })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Look up the channel id locally and check that the src and destination of the channel match our data
       const channelInfo = await this.findChannelFromId(channelId)
       if (!channelInfo) {
         this.logError('Rejected invoice as channel was not found locally', { invoice: request, channelId })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Is this channel's remote peer the one the invoice is from (should be)
       if (channelInfo.remotePublicKey !== paidTo) {
         this.logError('Rejected invoice as request remote does not match channel remote', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey })
-        return false
+        return { allow: false, reason: 'invalid request' }
       }
 
       // Check we've not paid out too much recently
       const denyReason = await this._denyPaymentReason(channelId, amount)
-      if (denyReason !== null) {
-        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey, reason: denyReason })
-        return false
+      if (!denyReason.allow) {
+        this.logError('Rejected invoice as node/channel is over its configured limits', { invoice: request, paidTo: paidTo, channelNode: channelInfo.remotePublicKey, reason: denyReason.reason })
       }
 
-      // Can't find a good reason not to pay it, so pay it
-      return true
+      return denyReason
     } catch (err) {
       this.logError('Failed to determine if an invoice should be paid', { ...msg, error: err.message })
     }
@@ -350,18 +357,26 @@ class Lightning extends Logging {
     // Too many recent transactions?
     const maxTransactions = settings('maxTransactionsPerPeriod', [this.alias])
     if (recent.length >= maxTransactions) {
-      return `${recent.length} transactions in last ${recent}ms. Limit is ${maxTransactions}`
+      return {
+        allow: false,
+        reason: `${recent.length} transactions in last ${limitsPeriod}. Limit is ${maxTransactions}`,
+        retryAt: since + period + 1
+      }
     }
 
     // too much money moved recently?
     const maxTotalAmount = settings('maxAmountPerPeriod', [this.alias])
     const sumOfTransactions = recent.reduce((total, t) => total.plus(t.amount), new BigNumber(0))
     if (sumOfTransactions.plus(amount).isGreaterThan(maxTotalAmount)) {
-      return `${sumOfTransactions.plus(amount).toString()} tokens sent in last ${recent}ms. Limit is ${maxTotalAmount}`
+      return {
+        allow: false,
+        reason: `${sumOfTransactions.plus(amount).toString()} tokens sent in last ${recent}ms. Limit is ${maxTotalAmount}`,
+        retryAt: since + period + 1
+      }
     }
 
     // all good - I guess you can do the transaction
-    return null
+    return { allow: true }
   }
 
   /**
@@ -371,8 +386,12 @@ class Lightning extends Logging {
    * @param {*} result
    */
   async confirmPayment (result) {
-    if (result.confirmed) {
-      this.blockedPending = this.blockedPending.filter((c) => c.id !== result.channelId)
+    this.blockedPending = this.blockedPending.filter((c) => c.id !== result.channelId)
+    if (!result.confirmed) {
+      // failed. If there is a retryAt property, then we can wait until then before we attempt to rebalance here again
+      if (result.retryAt) {
+        this.blockedPending.push({ id: result.channelId, until: result.retryAt })
+      }
     }
   }
 
