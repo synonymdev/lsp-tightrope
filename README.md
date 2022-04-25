@@ -63,6 +63,8 @@ Possible settings found in baseSettings, or each entry in idSettings are as foll
 * maxTransactionSize - the max size, in tokens, of a single transaction
 * minTimeBetweenPayments - The shortest possible time between each rebalancing payment being made. (as a time string, eg "60s", "10m", "4h", "1d")
 * limitsPeriod - The period of time to limit transaction counts and amount to (as a time string)
+* useRollingLimitsPeriod - true to use a rolling period. For example, settings limitsPeriod to "1d" and useRollingLimitsPeriod to true
+  will cause Tightrope to consider the transactions in the previous 24 hours for maxTransactionsPeriod and maxAmountPerPeriod. So if it was 7pm now, it will consider transactions back to 7pm yesterday and always consider a 1 day rolling window. if useRollingLimitsPeriod is false, then the periods are not rolling, so "1d" would always start at midnight and run until the end of the day.
 * maxTransactionsPeriod - The period used for the above limit
 * maxAmountPerPeriod - The max amount that can be transacted (sum of all transactions) in each period
 * balancePoint - Where should the balance point be for the funds in the channel. Defaults to 0.5

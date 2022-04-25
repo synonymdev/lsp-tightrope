@@ -21,6 +21,7 @@
         "maxTransactionSize": 1000000,
         "minTimeBetweenPayments": "60s",
         "limitsPeriod": "4h",
+        "useRollingLimitsPeriod": true,
         "maxTransactionsPerPeriod": 20,
         "maxAmountPerPeriod": 100000000,
         "balancePoint": 0.5,
