@@ -2,11 +2,13 @@
     "secret": "secret",
     "lightningNodes": [
       {
+        "type": "lnd",
         "cert": "",
         "macaroon": "",
         "socket": ""
       }
     ],
+    "announceInterval": 90000,
     "audit": {
       "storage": {
         "path": "./storage/"

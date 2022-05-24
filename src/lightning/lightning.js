@@ -1,11 +1,10 @@
 const BigNumber = require('bignumber.js')
-const lnService = require('ln-service')
 const { clearInterval } = require('timers')
-const Logging = require('./logging')
-const transactions = require('./transactions')
-const asyncFilter = require('./util/async-filter')
-const settings = require('./util/tightrope-settings')
-const timeToMilliseconds = require('./util/time-to-milliseconds')
+const Logging = require('../logging')
+const transactions = require('../transactions')
+const asyncFilter = require('../util/async-filter')
+const settings = require('../util/tightrope-settings')
+const timeToMilliseconds = require('../util/time-to-milliseconds')
 
 // https://github.com/alexbosworth/ln-service
 
@@ -16,17 +15,12 @@ class Lightning extends Logging {
    */
   constructor (node) {
     super()
-    this.cert = node.cert
-    this.macaroon = node.macaroon
-    this.socket = node.socket
-    this.alias = 'none'
 
     // wallet info
-    this.walletInfo = null
+    this.type = 'unknown'
+    this.alias = 'none'
+    this.version = ''
     this.publicKey = null
-
-    // The lightning node (LND only at the moment...)
-    this.lnd = null
 
     // list of channels we are watching
     this.watchList = []
@@ -41,26 +35,6 @@ class Lightning extends Logging {
    * Attempt to connect to the node using the credentials given
    */
   async connect () {
-    // Already connected?
-    if (this.lnd) {
-      return
-    }
-
-    // Connect to the light node...
-    const credentials = {
-      cert: this.cert,
-      macaroon: this.macaroon,
-      socket: this.socket
-    }
-
-    // Connect and remember
-    const auth = lnService.authenticatedLndGrpc(credentials)
-    this.lnd = auth.lnd
-
-    this.walletInfo = await lnService.getWalletInfo({ lnd: this.lnd })
-    this.publicKey = this.walletInfo.public_key
-    this.alias = this.walletInfo.alias
-
     // Get the current list of channels
     await this._refreshChannelList()
 
@@ -69,7 +43,7 @@ class Lightning extends Logging {
     this.pollingTimer = setInterval(() => this._onPollChannels(), interval)
 
     // log it
-    this.logEvent('lightningConnected', { alias: this.alias, publicKey: this.publicKey, lnVersion: this.walletInfo.version })
+    this.logEvent('lightningConnected', { alias: this.alias, publicKey: this.publicKey, type: this.type, lnVersion: this.version })
   }
 
   /**
@@ -77,17 +51,57 @@ class Lightning extends Logging {
    */
   async disconnect () {
     if (this.publicKey) {
-      this.logEvent('lightningDisconnect', { alias: this.alias, publicKey: this.publicKey, lnVersion: this.walletInfo?.version })
+      this.logEvent('lightningDisconnect', { alias: this.alias, publicKey: this.publicKey, type: this.type, lnVersion: this.version })
     }
 
-    this.lnd = null
-    this.walletInfo = null
+    this.version = ''
     this.publicKey = null
     this.alias = 'disconnected'
     this.watchList = []
 
     clearInterval(this.pollingTimer)
     this.pollingTimer = null
+  }
+
+  async _hasConnection () {
+    return false
+  }
+
+  /**
+   * Implementation specific way to create an invoice
+   * @param {*} tokens
+   * @param {*} expiresAt
+   */
+  async _createInvoice (tokens, lifespan) {
+    throw new Error('Not implemented - replace in implementation specific class')
+  }
+
+  /**
+   * Implementation specific way to pay an invoice
+   * @param {*} tokens
+   * @param {*} expiresAt
+   */
+  async _pay (invoice, outgoingChannelHint) {
+    throw new Error('Not implemented - replace in implementation specific class')
+  }
+
+  /**
+   * Implementation specific way to decode a bolt 11 invoice
+   * @param {*} tokens
+   * @param {*} expiresAt
+   */
+  async _decode (invoice) {
+    throw new Error('Not implemented - replace in implementation specific class')
+  }
+
+  /**
+   * Implementation specific way to find the list of channels on a node
+   * and return them, mapped to our own format
+   * @param {*} tokens
+   * @param {*} expiresAt
+   */
+  async _mappedChannels () {
+    throw new Error('Not implemented - replace in implementation specific class')
   }
 
   /**
@@ -108,14 +122,12 @@ class Lightning extends Logging {
         }
       }
 
-      const payment = await lnService.pay({ lnd: this.lnd, request: msg.invoice, outgoing_channel: msg.channelId })
-      if (payment && payment.is_confirmed) {
-        this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.id })
+      const payment = await this._pay(msg.invoice, msg.channelId)
+      if (payment && payment.confirmed) {
+        this.logEvent('invoicePaid', { alias: this.alias, publicKey: this.publicKey, invoice: msg.invoice, paymentId: payment.paymentId })
         return {
           ...shouldPay,
-          paymentId: payment.id || null,
-          confirmed: payment.is_confirmed || false,
-          confirmedAt: payment.confirmed_at || null
+          ...payment
         }
       }
 
@@ -241,17 +253,11 @@ class Lightning extends Logging {
 
       // Create an invoice
       const tokens = invoiceAmount.toFixed(0)
-      const expiresAt = new Date(Date.now() + this.invoiceLifespan)
-      const invoice = await lnService.createInvoice({
-        lnd: this.lnd,
-        description: 'tightrope rebalance',
-        expires_at: expiresAt.toISOString(),
-        tokens: tokens
-      })
+      const invoice = await this._createInvoice(tokens, this.invoiceLifespan)
 
       // Ask for this invoice to be paid by the other side...
-      this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice.request })
-      this.emit('requestRebalance', channel, invoice.request, tokens)
+      this.logEvent('invoiceCreated', { alias: this.alias, publicKey: this.publicKey, channelId: channel.id, amount: tokens, invoice: invoice })
+      this.emit('requestRebalance', channel, invoice, tokens)
     } catch (err) {
       this.logError('rebalance channel failed', err.message)
     }
@@ -296,11 +302,11 @@ class Lightning extends Logging {
 
       // decode the payment request
       const request = msg.invoice
-      const details = await lnService.decodePaymentRequest({ lnd: this.lnd, request })
+      const details = await this._decode(request)
 
       // Check the amount matches
-      if (+details.tokens !== +amount) {
-        this.logError('Rejected invoice as amount differs', { invoice: request, invoiceAmount: details.tokens, requestAmount: amount })
+      if (details.amount !== +amount) {
+        this.logError('Rejected invoice as amount differs', { invoice: request, invoiceAmount: details.amount, requestAmount: amount })
         return { allow: false, reason: 'invalid request' }
       }
 
@@ -401,25 +407,13 @@ class Lightning extends Logging {
    */
   async _refreshChannelList () {
     try {
-      if (!this.lnd) {
+      if (!this._hasConnection()) {
         this.channels = []
         return this.channels
       }
 
-      const channelList = await lnService.getChannels({ lnd: this.lnd })
-      this.channels = channelList.channels.map((c) => ({
-        id: c.id,
-        localAlias: this.alias,
-        localPublicKey: this.publicKey,
-        remotePublicKey: c.partner_public_key,
-        localBalance: new BigNumber(c.local_balance),
-        remoteBalance: new BigNumber(c.remote_balance),
-        capacity: new BigNumber(c.capacity),
-        isActive: c.is_active,
-        isClosing: c.is_closing,
-        isOpening: c.is_opening,
-        isPrivate: c.is_private
-      }))
+      // fetch and remap the channels to our internal format
+      this.channels = await this._mappedChannels()
     } catch (err) {
       this.logError('Failed to update the channel list', { alias: this.alias, error: err.message })
       this.channels = []

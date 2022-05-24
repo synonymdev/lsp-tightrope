@@ -1,18 +1,20 @@
 const config = require('config')
+const goodbye = require('graceful-goodbye')
 const Tightrope = require('./tightrope')
 const eventLog = require('./audit/event-log')
 const transactions = require('./transactions')
 
-const balancers = []
-const nodes = config.get('lightningNodes')
+// The separate tightrope instances for each lightning node
+let balancers = []
 
 // Catch any forced shutdowns (Ctrl-c, kill etc) and attempt to cleanly close connections
-process.on('SIGTERM', (signal) => { console.log(signal); process.exit(0) })
-process.on('SIGINT', (signal) => { console.log(signal); process.exit(0) })
-process.on('uncaughtException', (err) => { console.log(err); process.exit(1) })
-process.on('exit', async (code) => {
-  console.log(`\nProcess Terminating (${code}). Cleaning up...`)
-  balancers.forEach(node => node.shutdown())
+goodbye(async () => {
+  console.log('\nProcess Terminating. Cleaning up...')
+  for (let i = 0; i < balancers.length; i += 1) {
+    await balancers[i].shutdown()
+  }
+
+  balancers = []
 })
 
 async function main () {
@@ -21,6 +23,7 @@ async function main () {
   await transactions.waitForReady()
 
   // Find all the nodes this instance needs to follow...
+  const nodes = config.get('lightningNodes')
   nodes.forEach(async (node) => {
     const t = new Tightrope(node)
     balancers.push(t)
