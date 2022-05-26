@@ -3,7 +3,7 @@ const crypto = require('crypto')
 const Hyperswarm = require('hyperswarm')
 const bs58 = require('bs58')
 const signMessage = require('./util/sign')
-const Lightning = require('./lightning')
+const LightningFactory = require('./lightning')
 const Logging = require('./logging')
 const transactions = require('./transactions')
 
@@ -29,6 +29,10 @@ class Tightrope extends Logging {
     this.activeConnections = []
     this.channelOwners = []
 
+    // an interval that we shout "hello" to the world
+    this.helloTimer = null
+    this.announceInterval = config.get('announceInterval') + (Math.random() * 2000)
+
     // track the node info
     this.lnNodeInfo = lnNodeInfo
   }
@@ -42,9 +46,13 @@ class Tightrope extends Logging {
       this.logEvent('starting')
 
       // Connect to the lightning node
-      this.lightning = new Lightning(this.lnNodeInfo)
+      this.lightning = LightningFactory(this.lnNodeInfo)
       await this.lightning.connect()
       this.lightning.on('requestRebalance', (id, request, tokens) => this._onRequestRebalance(id, request, tokens))
+
+      // start an interval timer to say hello
+      clearInterval(this.helloTimer)
+      this.helloTimer = setInterval(() => this._onAnnounceHello(), this.announceInterval)
 
       // Create a new one
       const swarm = new Hyperswarm()
@@ -55,11 +63,12 @@ class Tightrope extends Logging {
       swarm.on('connection', (socket, peerInfo) => this._onOpenConnection(socket, peerInfo))
 
       // join the hyperswarm on the topic we derived from the secret
-      swarm.join(this.topic)
+      await swarm.join(this.topic).flushed()
+      await swarm.flush()
 
       this.logEvent('swarmConnected', { topic: this.topicBase58 })
     } catch (err) {
-      this.logError('Failed while connecting to LN node and HyperSwarm', err)
+      this.logError('Failed while connecting to LN node and HyperSwarm', err.message)
     }
   }
 
@@ -68,6 +77,10 @@ class Tightrope extends Logging {
    */
   async shutdown () {
     this.logEvent('shutdown')
+
+    // stop the timer
+    clearInterval(this.helloTimer)
+    this.helloTimer = null
 
     // leave the swarm, so we don't connect with anyone new
     if (this.swarm) {
@@ -124,6 +137,13 @@ class Tightrope extends Logging {
   _onCloseConnection (remotePeer) {
     this._removeActiveConnection(remotePeer)
     this.logEvent('peerDisconnected', { remotePeer })
+  }
+
+  /**
+   * Called from time to time - we shout hello at everyone we know
+   */
+  _onAnnounceHello () {
+    this.activeConnections.forEach((c) => this._sendMessage(c.remotePublicKey, { type: 'hello', publicKey: this.lightning.publicKey, alias: this.lightning.alias }))
   }
 
   /**
