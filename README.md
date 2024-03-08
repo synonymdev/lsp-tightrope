@@ -1,4 +1,4 @@
-# Blocktank - Tightrope
+# LSP - Tightrope
 
 Tightrope can automatically rebalance channels within a cluster of Lightning Network nodes using distributed peer-to-peer communication over [Hyperswarm](https://github.com/hyperswarm/hyperswarm).
 
