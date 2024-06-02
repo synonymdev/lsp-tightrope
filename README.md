@@ -17,6 +17,20 @@ npm install
 node src
 ```
 
+## Docker
+
+**docker build**
+
+Create the `config/local.json` file like above.
+```
+docker build -t <docker user>/blocktank-tightrope .
+docker run <docker user>/blocktank-tightrope
+```
+**docker-compose**
+```
+docker-compose up -d --build
+```
+
 ## What does Tightrope do?
 
 Each instance of Tightrope can be given API credentials of many Lightning nodes. Tightrope will find all the channels between these Lightning nodes and keep an eye on them. When they drift too far out of balance, Tightrope will ask the poorer side of the channel to generate an invoice to bring it back into balance. Tightrope will then pass this invoice to the richer side of the channel, asking for it to be paid. When paid, the channel is back in balance.
